@@ -32,10 +32,9 @@ using namespace Microsoft::WRL;
 static std::wstring g_prefer    = L"svg";           // "svg" or "png"
 static std::string  g_detectA   = R"(EXT="MERMAID" | EXT="MM")";
 
-static std::wstring g_jarPath;                      // If empty: auto-detect moduleDir\plantuml.jar
-static std::wstring g_javaPath;                     // Optional explicit java[w].exe
+static std::wstring g_mmdcPath;                     // If empty: auto-detect moduleDir\mmdc.(bat|cmd|exe)
 static std::wstring g_logPath;                      // If empty: moduleDir\mermaidjswebview.log
-static DWORD        g_jarTimeoutMs = 8000;
+static DWORD        g_mmdcTimeoutMs = 8000;
 static bool         g_logEnabled = true;
 
 static bool         g_cfgLoaded = false;
@@ -67,7 +66,7 @@ static void AppendLog(const std::wstring& message) {
             DWORD written = 0;
             WriteFile(h, sep.c_str(), (DWORD)sep.size(), &written, nullptr);
         }
-        std::wstring header = FormatTimestamp() + L"--- PlantUML WebView session start ---\r\n";
+        std::wstring header = FormatTimestamp() + L"--- Mermaid.js WebView session start ---\r\n";
         std::string headerUtf8 = ToUtf8(header);
         if (!headerUtf8.empty()) {
             DWORD written = 0;
@@ -351,26 +350,15 @@ static bool WriteBufferToFile(const std::wstring& path, const void* data, size_t
     return true;
 }
 
-static bool TryAutoDetectPlantUmlJar(std::wstring& outPath) {
+static bool TryAutoDetectMmdcCli(std::wstring& outPath) {
     const std::wstring dir = GetModuleDir();
-    const std::wstring exact = dir + L"\\plantuml.jar";
-    if (FileExistsW(exact)) {
-        outPath = exact;
-        return true;
-    }
-
-    WIN32_FIND_DATAW fd{};
-    const std::wstring pattern = dir + L"\\plantuml*.jar";
-    HANDLE hFind = FindFirstFileW(pattern.c_str(), &fd);
-    if (hFind != INVALID_HANDLE_VALUE) {
-        do {
-            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-                outPath = dir + L"\\" + fd.cFileName;
-                FindClose(hFind);
-                return true;
-            }
-        } while (FindNextFileW(hFind, &fd));
-        FindClose(hFind);
+    const wchar_t* candidates[] = {L"mmdc.bat", L"mmdc.cmd", L"mmdc.exe"};
+    for (const wchar_t* name : candidates) {
+        const std::wstring candidate = dir + L"\\" + name;
+        if (FileExistsW(candidate)) {
+            outPath = candidate;
+            return true;
+        }
     }
     return false;
 }
@@ -380,7 +368,7 @@ static void LoadConfigIfNeeded() {
     g_cfgLoaded = true;
 
     const std::wstring moduleDir = GetModuleDir();
-    const std::wstring ini = moduleDir + L"\\plantumlwebview.ini";
+    const std::wstring ini = moduleDir + L"\\mermaidjswebview.ini";
     wchar_t buf[2048];
 
     if (GetPrivateProfileStringW(L"render", L"prefer", L"", buf, 2048, ini.c_str()) > 0 && buf[0]) g_prefer = buf;
@@ -392,20 +380,14 @@ static void LoadConfigIfNeeded() {
         if (!utf8.empty()) g_detectA = utf8;
     }
 
-    if (GetPrivateProfileStringW(L"plantuml", L"jar", L"", buf, 2048, ini.c_str()) > 0 && buf[0]) {
-        g_jarPath = buf;
-        if (PathIsRelativeW(g_jarPath.c_str())) {
-            g_jarPath = moduleDir + L"\\" + g_jarPath;
+    if (GetPrivateProfileStringW(L"mmdc", L"cli", L"", buf, 2048, ini.c_str()) > 0 && buf[0]) {
+        g_mmdcPath = buf;
+        if (PathIsRelativeW(g_mmdcPath.c_str())) {
+            g_mmdcPath = moduleDir + L"\\" + g_mmdcPath;
         }
     }
-    if (GetPrivateProfileStringW(L"plantuml", L"java", L"", buf, 2048, ini.c_str()) > 0 && buf[0]) {
-        g_javaPath = buf;
-        if (PathIsRelativeW(g_javaPath.c_str())) {
-            g_javaPath = moduleDir + L"\\" + g_javaPath;
-        }
-    }
-    DWORD tmo = GetPrivateProfileIntW(L"plantuml", L"timeout_ms", 0, ini.c_str());
-    if (tmo > 0) g_jarTimeoutMs = tmo;
+    DWORD tmo = GetPrivateProfileIntW(L"mmdc", L"timeout_ms", 0, ini.c_str());
+    if (tmo > 0) g_mmdcTimeoutMs = tmo;
 
     int logEnabled = GetPrivateProfileIntW(L"debug", L"log_enabled", 1, ini.c_str());
     g_logEnabled = (logEnabled != 0);
@@ -419,29 +401,28 @@ static void LoadConfigIfNeeded() {
 
     if (g_logEnabled) {
         if (g_logPath.empty()) {
-            g_logPath = moduleDir + L"\\plantumlwebview.log";
+            g_logPath = moduleDir + L"\\mermaidjswebview.log";
         }
     } else {
         g_logPath.clear();
     }
 
-    bool needDetectJar = g_jarPath.empty();
-    if (!g_jarPath.empty() && !FileExistsW(g_jarPath)) {
-        AppendLog(L"LoadConfig: configured jar not found at " + g_jarPath + L". Attempting auto-detect.");
-        needDetectJar = true;
+    bool needDetectCli = g_mmdcPath.empty();
+    if (!g_mmdcPath.empty() && !FileExistsW(g_mmdcPath)) {
+        AppendLog(L"LoadConfig: configured Mermaid CLI not found at " + g_mmdcPath + L". Attempting auto-detect.");
+        needDetectCli = true;
     }
-    if (needDetectJar) {
+    if (needDetectCli) {
         std::wstring detected;
-        if (TryAutoDetectPlantUmlJar(detected)) {
-            g_jarPath.swap(detected);
+        if (TryAutoDetectMmdcCli(detected)) {
+            g_mmdcPath.swap(detected);
         }
     }
 
     std::wstringstream cfg;
     cfg << L"Config loaded. prefer=" << g_prefer
-        << L", jar=" << (g_jarPath.empty() ? L"<auto>" : g_jarPath)
-        << L", java=" << (g_javaPath.empty() ? L"<auto>" : g_javaPath)
-        << L", timeoutMs=" << g_jarTimeoutMs
+        << L", cli=" << (g_mmdcPath.empty() ? L"<auto>" : g_mmdcPath)
+        << L", timeoutMs=" << g_mmdcTimeoutMs
         << L", logEnabled=" << (g_logEnabled ? L"1" : L"0")
         << L", log=" << (g_logPath.empty() ? L"<disabled>" : g_logPath);
     AppendLog(cfg.str());
@@ -454,12 +435,19 @@ static std::wstring ToLowerTrim(const std::wstring& in) {
     std::transform(s.begin(), s.end(), s.begin(), [](wchar_t c){ return (wchar_t)towlower(c); });
     return s;
 }
-static bool FindJavaExecutable(std::wstring& outPath) {
-    if (!g_javaPath.empty() && FileExistsW(g_javaPath)) { outPath = g_javaPath; return true; }
-    wchar_t found[MAX_PATH]{};
-    if (SearchPathW(nullptr, L"java.exe", nullptr, MAX_PATH, found, nullptr))  { outPath = found; return true; }
-    if (SearchPathW(nullptr, L"javaw.exe", nullptr, MAX_PATH, found, nullptr)) { outPath = found; return true; }
-    return false;
+static std::wstring GetCommandProcessor() {
+    wchar_t buf[MAX_PATH]{};
+    DWORD len = GetEnvironmentVariableW(L"ComSpec", buf, MAX_PATH);
+    if (len > 0 && len < MAX_PATH) {
+        std::wstring value(buf, len);
+        if (!value.empty() && value.front() == L'"' && value.back() == L'"') {
+            value = value.substr(1, value.size() - 2);
+        }
+        if (!value.empty()) {
+            return value;
+        }
+    }
+    return L"cmd.exe";
 }
 
 // Simple base64 encoder (for PNG data URLs)
@@ -492,57 +480,62 @@ static std::string Base64(const std::vector<unsigned char>& in) {
     return out;
 }
 
-// Run "java -jar plantuml.jar -pipe -t(svg|png)" and capture stdout.
-static bool RunPlantUmlJar(const std::wstring& umlTextW, bool preferSvg,
-                           std::wstring& outSvg, std::vector<unsigned char>& outPng)
-{
-    AppendLog(L"RunPlantUmlJar: start");
+// Run "mmdc.bat -i - -o - -e (svg|png)" and capture stdout.
+static bool RunMmdcCli(const std::wstring& umlTextW,
+                             bool preferSvg,
+                             std::wstring& outSvg,
+                             std::vector<unsigned char>& outPng) {
+    outSvg.clear();
+    outPng.clear();
 
-    if (g_jarPath.empty()) {
-        AppendLog(L"RunPlantUmlJar: jar path is empty");
+    if (g_mmdcPath.empty()) {
+        AppendLog(L"RunMmdcCli: cli path is empty");
         return false;
     }
-    if (!FileExistsW(g_jarPath)) {
-        AppendLog(L"RunPlantUmlJar: jar not found at " + g_jarPath);
-        return false;
-    }
-
-    std::wstring javaExe;
-    if (!FindJavaExecutable(javaExe)) {
-        AppendLog(L"RunPlantUmlJar: Java executable not found");
+    if (!FileExistsW(g_mmdcPath)) {
+        AppendLog(L"RunMmdcCli: cli not found at " + g_mmdcPath);
         return false;
     }
 
-    AppendLog(L"RunPlantUmlJar: using java executable " + javaExe);
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = nullptr;
+    sa.bInheritHandle = TRUE;
 
-
-    std::wstring fmt = preferSvg ? L"-tsvg" : L"-tpng";
-
-    SECURITY_ATTRIBUTES sa{ sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE };
-    HANDLE hInR=nullptr,  hInW=nullptr;
-    HANDLE hOutR=nullptr, hOutW=nullptr;
+    HANDLE hInR = nullptr, hInW = nullptr;
+    HANDLE hOutR = nullptr, hOutW = nullptr;
 
     if (!CreatePipe(&hInR, &hInW, &sa, 0)) {
-        AppendLog(L"RunPlantUmlJar: failed to create stdin pipe");
+        AppendLog(L"RunMmdcCli: failed to create stdin pipe");
         return false;
     }
     if (!CreatePipe(&hOutR, &hOutW, &sa, 0)) {
-        AppendLog(L"RunPlantUmlJar: failed to create stdout pipe");
-        CloseHandle(hInR); CloseHandle(hInW);
+        AppendLog(L"RunMmdcCli: failed to create stdout pipe");
+        CloseHandle(hInR);
+        CloseHandle(hInW);
         return false;
     }
 
-    // Make only the child side inheritable
     SetHandleInformation(hInR,  HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
     SetHandleInformation(hOutW, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
     SetHandleInformation(hInW,  HANDLE_FLAG_INHERIT, 0);
     SetHandleInformation(hOutR, HANDLE_FLAG_INHERIT, 0);
 
-    std::wstringstream cmd;
-    cmd << L"\"" << javaExe << L"\" -Djava.awt.headless=true -jar \"" << g_jarPath
-        << L"\" -pipe " << fmt;
+    const std::wstring comspec = GetCommandProcessor();
+    std::wstringstream cli;
+    cli << L"\"" << g_mmdcPath << L"\"" << L" -q -i - -o -";
+    if (preferSvg) {
+        cli << L" -e svg";
+    } else {
+        cli << L" -e png";
+    }
 
-    STARTUPINFOW si{}; si.cb = sizeof(si);
+    std::wstring commandLine = L"\"" + comspec + L"\"" + L" /C \"" + cli.str() + L"\"";
+    std::vector<wchar_t> cmdBuffer(commandLine.begin(), commandLine.end());
+    cmdBuffer.push_back(L'\0');
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
     si.dwFlags |= STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
     si.hStdInput  = hInR;
@@ -550,29 +543,27 @@ static bool RunPlantUmlJar(const std::wstring& umlTextW, bool preferSvg,
     si.hStdError  = hOutW;
 
     PROCESS_INFORMATION pi{};
-    std::wstring cmdline = cmd.str();
-    BOOL ok = CreateProcessW(nullptr, cmdline.data(), nullptr, nullptr, TRUE,
+    BOOL ok = CreateProcessW(nullptr, cmdBuffer.data(), nullptr, nullptr, TRUE,
                              CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
     CloseHandle(hOutW);
     CloseHandle(hInR);
 
     if (!ok) {
-        AppendLog(L"RunPlantUmlJar: CreateProcessW failed with error " + std::to_wstring(GetLastError()));
-        CloseHandle(hInW); CloseHandle(hOutR);
+        AppendLog(L"RunMmdcCli: CreateProcessW failed with error " + std::to_wstring(GetLastError()));
+        CloseHandle(hInW);
+        CloseHandle(hOutR);
         return false;
     }
 
-    // Write UML as UTF-8 to child stdin
     std::string umlUtf8 = ToUtf8(umlTextW);
     DWORD written = 0;
     if (!umlUtf8.empty()) {
-        if (!WriteFile(hInW, umlUtf8.data(), (DWORD)umlUtf8.size(), &written, nullptr)) {
-            AppendLog(L"RunPlantUmlJar: failed to write UML to stdin (error=" + std::to_wstring(GetLastError()) + L")");
+        if (!WriteFile(hInW, umlUtf8.data(), static_cast<DWORD>(umlUtf8.size()), &written, nullptr)) {
+            AppendLog(L"RunMmdcCli: failed to write Mermaid definition to stdin (error=" + std::to_wstring(GetLastError()) + L")");
         }
     }
-    CloseHandle(hInW); // signal EOF
+    CloseHandle(hInW);
 
-    // Read child's stdout (up to 50MB)
     std::vector<unsigned char> buffer;
     buffer.reserve(64 * 1024);
     unsigned char tmp[16 * 1024];
@@ -591,11 +582,11 @@ static bool RunPlantUmlJar(const std::wstring& umlTextW, bool preferSvg,
     }
     CloseHandle(hOutR);
 
-    DWORD wr = WaitForSingleObject(pi.hProcess, g_jarTimeoutMs);
+    DWORD wr = WaitForSingleObject(pi.hProcess, g_mmdcTimeoutMs);
     if (wr == WAIT_FAILED) {
-        AppendLog(L"RunPlantUmlJar: WaitForSingleObject failed with error " + std::to_wstring(GetLastError()));
+        AppendLog(L"RunMmdcCli: WaitForSingleObject failed with error " + std::to_wstring(GetLastError()));
     } else if (wr == WAIT_TIMEOUT) {
-        AppendLog(L"RunPlantUmlJar: timeout after " + std::to_wstring(g_jarTimeoutMs) + L" ms");
+        AppendLog(L"RunMmdcCli: timeout after " + std::to_wstring(g_mmdcTimeoutMs) + L" ms");
         TerminateProcess(pi.hProcess, 1);
     }
     CloseHandle(pi.hThread);
@@ -604,41 +595,40 @@ static bool RunPlantUmlJar(const std::wstring& umlTextW, bool preferSvg,
     CloseHandle(pi.hProcess);
 
     if (buffer.empty()) {
-        AppendLog(L"RunPlantUmlJar: process produced no output. exitCode=" + std::to_wstring(exitCode));
+        AppendLog(L"RunMmdcCli: process produced no output. exitCode=" + std::to_wstring(exitCode));
         return false;
     }
 
     if (preferSvg) {
-        // interpret bytes as UTF-8 SVG
         int wlen = MultiByteToWideChar(CP_UTF8, 0,
-                                       (const char*)buffer.data(), (int)buffer.size(),
+                                       reinterpret_cast<const char*>(buffer.data()), static_cast<int>(buffer.size()),
                                        nullptr, 0);
         if (wlen <= 0) {
-            AppendLog(L"RunPlantUmlJar: failed to decode SVG output");
+            AppendLog(L"RunMmdcCli: failed to decode SVG output");
             return false;
         }
-        std::wstring svg(wlen, L'\0');
-        MultiByteToWideChar(CP_UTF8, 0, (const char*)buffer.data(), (int)buffer.size(),
+        std::wstring svg(static_cast<size_t>(wlen), L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, reinterpret_cast<const char*>(buffer.data()), static_cast<int>(buffer.size()),
                             svg.data(), wlen);
         outSvg.swap(svg);
     } else {
         outPng.swap(buffer);
     }
-    AppendLog(L"RunPlantUmlJar: success. exitCode=" + std::to_wstring(exitCode) +
-              L", outputLength=" + std::to_wstring((unsigned long long)(preferSvg ? outSvg.size() : outPng.size())));
+    AppendLog(L"RunMmdcCli: success. exitCode=" + std::to_wstring(exitCode) +
+              L", outputLength=" + std::to_wstring(static_cast<unsigned long long>(preferSvg ? outSvg.size() : outPng.size())));
     return true;
 }
 
 static std::wstring BuildShellHtmlWithBody(const std::wstring& body, bool preferSvg);
 
-static bool BuildHtmlFromJavaRender(const std::wstring& umlText,
+static bool BuildHtmlFromMmdcRender(const std::wstring& umlText,
                                     bool preferSvg,
                                     std::wstring& outHtml,
                                     std::wstring* outSvg,
                                     std::vector<unsigned char>* outPng) {
     std::wstring svgOut;
     std::vector<unsigned char> pngOut;
-    if (!RunPlantUmlJar(umlText, preferSvg, svgOut, pngOut)) {
+    if (!RunMmdcCli(umlText, preferSvg, svgOut, pngOut)) {
         return false;
     }
 
@@ -930,7 +920,7 @@ static bool HostRenderAndReload(Host* host,
     std::vector<unsigned char> png;
     std::wstring htmlToNavigate;
 
-    if (BuildHtmlFromJavaRender(text, preferSvg, html, &svg, &png)) {
+    if (BuildHtmlFromMmdcRender(text, preferSvg, html, &svg, &png)) {
         AppendLog(logContext + L": render succeeded");
         {
             std::lock_guard<std::mutex> lock(host->stateMutex);
@@ -1433,9 +1423,9 @@ __declspec(dllexport) HWND __stdcall ListLoadW(HWND ParentWin, wchar_t* FileToLo
     const bool preferSvg = (ToLowerTrim(g_prefer) == L"svg");
     AppendLog(L"ListLoadW: preferSvg=" + std::wstring(preferSvg ? L"true" : L"false"));
 
-    AppendLog(L"ListLoadW: attempting local Java render with jar=" + (g_jarPath.empty() ? std::wstring(L"<auto>") : g_jarPath));
+    AppendLog(L"ListLoadW: attempting Mermaid CLI render with cli=" + (g_mmdcPath.empty() ? std::wstring(L"<auto>") : g_mmdcPath));
     std::wstring html;
-    if (BuildHtmlFromJavaRender(text, preferSvg, html, &host->lastSvg, &host->lastPng)) {
+    if (BuildHtmlFromMmdcRender(text, preferSvg, html, &host->lastSvg, &host->lastPng)) {
         {
             std::lock_guard<std::mutex> lock(host->stateMutex);
             host->initialHtml = html;
@@ -1445,7 +1435,7 @@ __declspec(dllexport) HWND __stdcall ListLoadW(HWND ParentWin, wchar_t* FileToLo
         }
         AppendLog(L"ListLoadW: local render succeeded" + std::wstring(preferSvg ? L" (SVG)" : L" (PNG)"));
     } else {
-        const std::wstring lastErr = L"Local Java/JAR rendering failed. Check Java installation and plantuml.jar path in the INI file.";
+        const std::wstring lastErr = L"Local Mermaid CLI rendering failed. Check mmdc.bat path in the INI file.";
         {
             std::lock_guard<std::mutex> lock(host->stateMutex);
             host->initialHtml = BuildErrorHtml(lastErr, preferSvg);
@@ -1455,7 +1445,7 @@ __declspec(dllexport) HWND __stdcall ListLoadW(HWND ParentWin, wchar_t* FileToLo
             host->lastPng.clear();
             host->hasRender = false;
         }
-        AppendLog(L"ListLoadW: java error message -> " + lastErr);
+        AppendLog(L"ListLoadW: Mermaid CLI error message -> " + lastErr);
         AppendLog(L"ListLoadW: local render failed");
         AppendLog(L"ListLoadW: showing error HTML");
     }
