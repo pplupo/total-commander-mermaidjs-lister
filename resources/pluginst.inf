@@ -1,0 +1,8 @@
+[plugininstall]
+version=1.0.0
+defaultdir=MermaidJsWebView
+type=wlx64
+file=MermaidJsWebView.wlx64
+name=MermaidJs WebView Lister
+description=MermaidJs preview via WebView2
+defaultextension=mermaid mmd
