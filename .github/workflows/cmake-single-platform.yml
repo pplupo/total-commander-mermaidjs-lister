@@ -34,41 +34,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Install PlantUML update dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install requests
-
-      - name: Update PlantUML artifacts
-        run: python scripts/update_plantuml.py
-
-      - name: Check PlantUML update status
-        id: plantuml_update
-        run: |
-          $status = git status --porcelain third_party plantumlwebview.ini
-          $jar = Get-ChildItem -Path third_party -Filter 'plantuml-mit-*.jar' | Sort-Object Name -Descending | Select-Object -First 1
-          if ($null -ne $jar) {
-            "jar=$($jar.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          }
-          if ([string]::IsNullOrWhiteSpace($status)) {
-            "updated=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          } else {
-            "updated=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          }
-
-      - name: Stage PlantUML updates
-        if: steps.plantuml_update.outputs.updated == 'true'
-        run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add third_party
-          git add plantumlwebview.ini
-
       - name: Install tools
         run: |
           choco install ninja -y
@@ -112,7 +77,7 @@ jobs:
       - name: Stage package (flat, installable ZIP)
         run: |
           Set-StrictMode -Version Latest
-          $stage = "package/PlantUmlWebView"
+          $stage = Join-Path -Path "package" -ChildPath "MermaidJsWebView"
           Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $stage | Out-Null
 
@@ -123,12 +88,12 @@ jobs:
           if (!(Test-Path $inf)) { throw "$inf not found" }
           Copy-Item -Force $inf $stage\
 
-          if (Test-Path .\plantumlwebview.ini) {
-            Copy-Item -Force .\plantumlwebview.ini $stage\
-          } elseif (Test-Path .\src\plantumlwebview.ini) {
-            Copy-Item -Force .\src\plantumlwebview.ini $stage\
+          if (Test-Path .\mermaidjswebview.ini) {
+            Copy-Item -Force .\mermaidjswebview.ini $stage\
+          } elseif (Test-Path .\src\mermaidjswebview.ini) {
+            Copy-Item -Force .\src\mermaidjswebview.ini $stage\
           } else {
-            Write-Host "No plantumlwebview.ini found; skipping."
+            Write-Host "No mermaidjswebview.ini found; skipping."
           }
 
           if (Test-Path .\README.md) { Copy-Item -Force .\README.md $stage\ }
@@ -137,18 +102,24 @@ jobs:
           if (!(Test-Path $wv2)) { throw "WebView2Loader.dll not found at $wv2" }
           Copy-Item -Force $wv2 $stage\
 
-          $plantumlJar = Get-ChildItem -Path third_party -Filter 'plantuml-mit-*.jar' | Sort-Object Name -Descending | Select-Object -First 1
-          if ($null -eq $plantumlJar) {
-            throw "PlantUML jar (plantuml-mit-*.jar) not found in third_party"
+          $mermaidSrc = "third_party\mermaidjs"
+          if (!(Test-Path $mermaidSrc)) { throw "MermaidJS directory not found at $mermaidSrc" }
+          $mermaidDest = Join-Path -Path $stage -ChildPath "mermaidjs"
+          Copy-Item -Recurse -Force $mermaidSrc $mermaidDest
+
+          $tarPath = Join-Path -Path $mermaidDest -ChildPath "mermaid-portable-dist.tar"
+          if (Test-Path $tarPath) {
+            tar -xf $tarPath -C $mermaidDest
+            Remove-Item -Force $tarPath
           }
-          Copy-Item -Force $plantumlJar.FullName $stage\
 
       - name: Create ZIP (no nesting)
         run: |
           Set-StrictMode -Version Latest
-          $out = "PlantUmlWebView.zip"
+          $stage = Join-Path -Path "package" -ChildPath "MermaidJsWebView"
+          $out = "MermaidJsWebView.zip"
           Remove-Item -Force $out -ErrorAction SilentlyContinue
-          Compress-Archive -Path package\PlantUmlWebView\* -DestinationPath $out -Force
+          Compress-Archive -Path (Join-Path -Path $stage -ChildPath '*') -DestinationPath $out -Force
 
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $zip = [IO.Compression.ZipFile]::OpenRead($out)
@@ -184,29 +155,6 @@ jobs:
           }
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      - name: Create MermaidJs update PR
-        id: create_pr
-        if: steps.mermaidjs_update.outputs.updated == 'true'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: Update MermaidJs to latest version
-          title: 'Update MermaidJs to latest version'
-          body: |
-            This PR updates the bundled MermaidJs MIT-licensed jar to the latest version.
-            It was created automatically by the Build + Release workflow while preparing `${{ steps.tag.outputs.tag }}`.
-          branch: release/MermaidJs-update-${{ steps.tag.outputs.tag }}
-          base: main
-          delete-branch: true
-
-      - name: Enable automerge for MermaidJs update PR
-        if: steps.create_pr.outputs.pull-request-number
-        uses: peter-evans/enable-pull-request-automerge@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          pull-request-number: ${{ steps.create_pr.outputs.pull-request-number }}
-          merge-method: squash
-
       - name: Generate release notes
         id: release_notes
         env:
@@ -222,11 +170,6 @@ jobs:
           $payload = @{ tag_name = $tag; target_commitish = $target } | ConvertTo-Json -Compress
           $response = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/generate-notes" -Method Post -Headers $headers -Body $payload -ContentType 'application/json'
           $notes = $response.body
-          if ("${{ steps.plantuml_update.outputs.updated }}" -eq "true") {
-            $jarName = "${{ steps.plantuml_update.outputs.jar }}"
-            $updateNote = "### PlantUML Update`n- Updated bundled PlantUML jar to `$jarName` during this release.`n"
-            $notes = "$updateNote`n$notes"
-          }
           Set-Content -Path release_notes.md -Value $notes
           "path=release_notes.md" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
@@ -237,5 +180,5 @@ jobs:
           name: ${{ steps.tag.outputs.tag }}
           draft: ${{ github.event.inputs.draft || 'true' }}
           files: |
-            PlantUmlWebView.zip
+            MermaidJsWebView.zip
           body_path: ${{ steps.release_notes.outputs.path }}
