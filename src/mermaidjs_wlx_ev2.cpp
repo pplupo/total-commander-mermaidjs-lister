@@ -30,7 +30,7 @@ using namespace Microsoft::WRL;
 
 // ---------------------- Config ----------------------
 static std::wstring g_prefer    = L"svg";           // "svg" or "png"
-static std::string  g_detectA   = R"(EXT="MERMAID" | EXT="MM")";
+static std::string  g_detectA   = R"(EXT=".MERMAID" | EXT=".MMD")";
 
 static std::wstring g_mmdcPath;                     // If empty: auto-detect moduleDir\mmdc.(bat|cmd|exe)
 static std::wstring g_logPath;                      // If empty: moduleDir\mermaidjswebview.log
