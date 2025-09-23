@@ -117,6 +117,12 @@ jobs:
             Remove-Item -Force $tarPath
           }
 
+          $nodeModules = Join-Path -Path $mermaidDest -ChildPath 'node_modules'
+          if (Test-Path $nodeModules) {
+            Get-ChildItem -Path $nodeModules -Recurse -Filter '*.zip' -File -ErrorAction SilentlyContinue |
+              Remove-Item -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Create ZIP (no nesting)
         run: |
           Set-StrictMode -Version Latest
