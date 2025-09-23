@@ -1,7 +1,7 @@
-# PlantUmlWebView — Total Commander Lister
+# MermaidJsWebView — Total Commander Lister
 
-A tiny, modern PlantUML viewer for **Total Commander (64-bit)**.
-Renders diagrams **locally via Java + `plantuml.jar`**.
+A tiny, modern Mermaid.js viewer for **Total Commander (64-bit)**.
+Renders diagrams **locally via the Mermaid CLI (`mmdc.bat`)**.
 Powered by **WebView2** — no Qt or zlib required.
 
 ---
@@ -9,8 +9,8 @@ Powered by **WebView2** — no Qt or zlib required.
 ## Why this plugin?
 
 * 🪶 **Small footprint** – just a WLX DLL, a config INI, and `WebView2Loader.dll`.
-* ⚡ **Fast preview** – render via local Java + `plantuml.jar`.
-* 🔧 **Configurable** – choose **SVG** or **PNG**, and configure Java/JAR paths.
+* ⚡ **Fast preview** – render locally with the Mermaid CLI (`mmdc.bat`).
+* 🔧 **Configurable** – choose **SVG** or **PNG**, and configure the CLI path.
 * 📋 **Copy to clipboard** – **Ctrl+C** copies **SVG text** or a **PNG bitmap** from Lister.
 
 ---
@@ -20,7 +20,7 @@ Powered by **WebView2** — no Qt or zlib required.
 * **Total Commander 64-bit** (Lister/WLX plugin support).
 * **Microsoft Edge WebView2 Runtime** (evergreen).
   👉 Download from Microsoft: <https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download>
-* **Java** (`javaw.exe`/`java.exe`) and **`plantuml.jar`** (shipped with releases).
+* **Mermaid CLI** (`mmdc.bat`) – shipped with releases. The CLI requires **Node.js** and Chromium via Puppeteer.
 
 ---
 
@@ -36,8 +36,8 @@ That’s it. The plugin will be installed to your TC plugins folder.
 
 ## Usage
 
-* Select a PlantUML file (`.puml`, `.plantuml`, `.uml`, `.wsd`, `.ws`, `.iuml`) and press **F3** (Lister).
-* The plugin renders diagrams locally via Java + `plantuml.jar`. Configure `[plantuml]` in the INI if you need explicit paths.
+* Select a Mermaid file (e.g. `.mmd`, `.mermaid`) and press **F3** (Lister).
+* The plugin renders diagrams locally via `mmdc.bat`. Configure `[mmdc]` in the INI if you need explicit paths or timeouts.
 * **Ctrl+C** inside the preview:
   * **SVG mode:** copies the SVG markup as text.
   * **PNG mode:** copies a PNG bitmap.
@@ -46,32 +46,29 @@ That’s it. The plugin will be installed to your TC plugins folder.
 
 ## Configuration
 
-**INI path (after install):**  
-`%COMMANDER_PATH%\Plugins\wlx\PlantUmlWebView\plantumlwebview.ini`
+**INI path (after install):**
+`%COMMANDER_PATH%\Plugins\wlx\MermaidJsWebView\mermaidjswebview.ini`
 
 Default contents:
 
 ```ini
-; Rendering is performed locally via Java + plantuml.jar.
+; Rendering is performed locally via Mermaid CLI (mmdc.bat).
 
 [render]
 ; "svg" (default) or "png"
 prefer=svg
 
-[plantuml]
-; If empty, the plugin auto-tries "plantuml.jar" next to PlantUmlWebView.wlx64.
-; You can also point to a custom jar path here.
-jar=plantuml-mit-1.2025.7.jar
+[mmdc]
+; If empty, the plugin auto-tries "mmdc.bat" placed next to the plugin DLL.
+; You can also point to a custom CLI path here.
+cli=mmdc.bat
 
-; Optional explicit path to javaw.exe or java.exe. If empty, PATH is searched.
-java=
-
-; Kill the java process if it hangs (milliseconds)
+; Kill the CLI process if it hangs (milliseconds)
 timeout_ms=8000
 
 [detect]
 ; Detect string reported to Total Commander during installation.
-string=EXT="PUML" | EXT="PLANTUML" | EXT="UML" | EXT="WSD" | EXT="WS" | EXT="IUML"
+string=EXT="MERMAID" | EXT="MM"
 
 [debug]
 ; Optional log file path (defaults next to the plugin DLL)
@@ -89,7 +86,7 @@ log=
 
 ## Data handling
 
-All rendering happens locally via Java and `plantuml.jar`; the plugin does not perform any network requests.
+All rendering happens locally via `mmdc.bat`; the plugin does not perform any network requests beyond what the CLI needs to launch Chromium.
 
 ---
 
@@ -97,16 +94,16 @@ All rendering happens locally via Java and `plantuml.jar`; the plugin does not p
 
 * **Blank panel / “Render error”**
 
-  * Verify Java and `plantuml.jar` paths in `[plantuml]` are correct.
-* **Logging** – keep `[debug] log_enabled=1` (default) and inspect `plantumlwebview.log` (or a custom `[debug] log=` path) for details.
+  * Verify the `mmdc.bat` path in `[mmdc]` is correct.
+* **Logging** – keep `[debug] log_enabled=1` (default) and inspect `mermaidjswebview.log` (or a custom `[debug] log=` path) for details.
 * **“WebView2 Runtime not found”**
 
   * Install the **WebView2 Runtime (Evergreen)** from Microsoft (link above) and retry.
-* **Java mode fails**
+* **Mermaid CLI fails**
 
-  * Ensure Java is on PATH or set `[plantuml] java=...`.
-  * Ensure `plantuml.jar` is present (or set `[plantuml] jar=...`).
-  * Increase `[plantuml] timeout_ms` for large diagrams.
+  * Ensure Node.js, Chromium dependencies, and the Mermaid CLI are installed.
+  * Ensure `mmdc.bat` is present (or set `[mmdc] cli=...`).
+  * Increase `[mmdc] timeout_ms` for large diagrams.
 * **Copy to clipboard doesn’t work**
 
   * Click inside the preview to focus, then press **Ctrl+C**.
@@ -125,16 +122,16 @@ All rendering happens locally via Java and `plantuml.jar`; the plugin does not p
 Minimal CMake outline:
 
 ```cmake
-add_library(PlantUmlWebView SHARED src/plantuml_wlx_ev2.cpp)
-target_include_directories(PlantUmlWebView PRIVATE third_party/WebView2/build/native/include)
-target_link_libraries(PlantUmlWebView PRIVATE shlwapi)
-set_target_properties(PlantUmlWebView PROPERTIES OUTPUT_NAME "PlantUmlWebView" SUFFIX ".wlx64")
+add_library(MermaidJsWebView SHARED src/mermaidjs_wlx_ev2.cpp)
+target_include_directories(MermaidJsWebView PRIVATE third_party/WebView2/build/native/include)
+target_link_libraries(MermaidJsWebView PRIVATE shlwapi)
+set_target_properties(MermaidJsWebView PROPERTIES OUTPUT_NAME "MermaidJsWebView" SUFFIX ".wlx64")
 ```
 
 ---
 
 ## Acknowledgements
 
-* [PlantUML](https://plantuml.com/) – the rendering engine.
+* [Mermaid](https://mermaid.js.org/) – the rendering engine.
 * Microsoft **WebView2** – lightweight HTML rendering inside Lister.
 * **Total Commander** – for the flexible Lister plugin interface.
