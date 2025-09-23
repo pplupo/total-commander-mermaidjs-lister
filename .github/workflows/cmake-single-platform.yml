@@ -69,9 +69,10 @@ jobs:
 
       - name: Verify build outputs
         run: |
-          if (!(Test-Path dist\PlantUmlWebView.wlx64)) {
+          $plugin = 'MermaidJsWebView.wlx64'
+          if (!(Test-Path (Join-Path dist $plugin))) {
             Get-ChildItem -Recurse -File . | Select-Object FullName | Out-String -Width 2000 | Write-Host
-            throw "dist\PlantUmlWebView.wlx64 not found. Build failed or output dir differs."
+            throw "dist\$plugin not found. Build failed or output dir differs."
           }
 
       - name: Stage package (flat, installable ZIP)
@@ -81,8 +82,10 @@ jobs:
           Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $stage | Out-Null
 
-          if (!(Test-Path dist\PlantUmlWebView.wlx64)) { throw "dist\PlantUmlWebView.wlx64 not found" }
-          Copy-Item -Force dist\PlantUmlWebView.wlx64 $stage\
+          $plugin = 'MermaidJsWebView.wlx64'
+          $built = Join-Path -Path 'dist' -ChildPath $plugin
+          if (!(Test-Path $built)) { throw "$built not found" }
+          Copy-Item -Force $built $stage\
 
           $inf = "resources\pluginst.inf"
           if (!(Test-Path $inf)) { throw "$inf not found" }

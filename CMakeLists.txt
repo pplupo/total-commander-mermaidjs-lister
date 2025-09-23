@@ -27,4 +27,3 @@ set_target_properties(MermaidJsWebView PROPERTIES
     PREFIX ""                 # no "lib" prefix anywhere
     SUFFIX ".wlx64"           # produce MermaidJsWebView.wlx64 instead of .dll
 )
-
