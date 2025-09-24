@@ -728,6 +728,14 @@ static const wchar_t kHtmlPart1[] = LR"HTML(<!doctype html>
     #diagram-container { width: 100%; }
     #diagram-container svg { background-color: #ffffff !important; color: #000000 !important; }
     #diagram-container .mermaid { background-color: #ffffff !important; color: #000000 !important; }
+    #diagram-container svg .edgeLabel rect {
+      fill: rgba(255, 255, 255, 0.92) !important;
+      stroke: rgba(0, 0, 0, 0.35) !important;
+    }
+    #diagram-container svg .edgeLabel text,
+    #diagram-container svg .edgeLabel tspan {
+      fill: #1a1a1a !important;
+    }
     #png-preview { display: none; max-width: 100%; height: auto; }
     img, svg { max-width: 100%; height: auto; }
     .err { padding: 12px 14px; border-radius: 10px; background: color-mix(in oklab, Canvas 85%, red 15%); }
