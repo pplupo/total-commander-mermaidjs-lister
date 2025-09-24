@@ -673,7 +673,7 @@ static bool BuildHtmlFromMmdcRender(const std::wstring& umlText,
 #if MERMAIDJS_WEB_BUILD
 
 static std::wstring BuildWebShellHtml(const std::wstring& body, bool preferSvg) {
-    std::wstring html = LR"HTML(<!doctype html>
+    static const wchar_t kHtmlPart1[] = LR"HTML(<!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -768,7 +768,8 @@ static std::wstring BuildWebShellHtml(const std::wstring& body, bool preferSvg) 
         return;
       }
       if (getFormat() === 'png' && typeof window.ClipboardItem === 'undefined') {
-        copyButton.disabled = true;
+)HTML";
+    static const wchar_t kHtmlPart2[] = LR"HTML(        copyButton.disabled = true;
         copyButton.title = 'Clipboard image support is unavailable';
         return;
       }
@@ -889,7 +890,8 @@ static std::wstring BuildWebShellHtml(const std::wstring& body, bool preferSvg) 
       saveButton.addEventListener('click', saveDiagram);
     }
     if (copyButton) {
-      copyButton.addEventListener('click', copyDiagram);
+)HTML";
+    static const wchar_t kHtmlPart3[] = LR"HTML(      copyButton.addEventListener('click', copyDiagram);
     }
 
     document.addEventListener('keydown', (ev) => {
@@ -911,6 +913,11 @@ static std::wstring BuildWebShellHtml(const std::wstring& body, bool preferSvg) 
   </script>
 </body>
 </html>)HTML";
+    std::wstring html;
+    html.reserve(8509);
+    html.append(kHtmlPart1);
+    html.append(kHtmlPart2);
+    html.append(kHtmlPart3);
     ReplaceAll(html, L"{{BODY}}", body);
     ReplaceAll(html, L"{{FORMAT}}", preferSvg ? L"svg" : L"png");
     return html;
