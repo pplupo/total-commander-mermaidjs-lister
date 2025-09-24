@@ -524,6 +524,40 @@ static std::string Base64(const std::vector<unsigned char>& in) {
     return out;
 }
 
+static int Base64DecodeChar(wchar_t c) {
+    if (c >= L'A' && c <= L'Z') return static_cast<int>(c - L'A');
+    if (c >= L'a' && c <= L'z') return static_cast<int>(c - L'a' + 26);
+    if (c >= L'0' && c <= L'9') return static_cast<int>(c - L'0' + 52);
+    if (c == L'+') return 62;
+    if (c == L'/') return 63;
+    return -1;
+}
+
+static std::vector<unsigned char> Base64Decode(const std::wstring& in) {
+    std::vector<unsigned char> out;
+    int val = 0;
+    int valb = -8;
+    for (wchar_t wc : in) {
+        if (wc == L'=' || wc == L'\r' || wc == L'\n' || wc == L' ' || wc == L'\t') {
+            if (wc == L'=') {
+                break;
+            }
+            continue;
+        }
+        int decoded = Base64DecodeChar(wc);
+        if (decoded < 0) {
+            continue;
+        }
+        val = (val << 6) + decoded;
+        valb += 6;
+        if (valb >= 0) {
+            out.push_back(static_cast<unsigned char>((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    return out;
+}
+
 // Run "mmdc.bat -i - -o - -e (svg|png)" and capture stdout.
 static bool RunMmdcCli(const std::wstring& umlTextW,
                              bool preferSvg,
@@ -673,7 +707,8 @@ static bool BuildHtmlFromMmdcRender(const std::wstring& umlText,
 #if MERMAIDJS_WEB_BUILD
 
 static std::wstring BuildWebShellHtml(const std::wstring& body, bool preferSvg) {
-    static const wchar_t kHtmlPart1[] = LR"HTML(<!doctype html>
+    
+static const wchar_t kHtmlPart1[] = LR"HTML(<!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -683,18 +718,23 @@ static std::wstring BuildWebShellHtml(const std::wstring& body, bool preferSvg) 
   <style>
     :root { color-scheme: light dark; }
     html, body { height: 100%; }
-    body { margin: 0; background: canvas; color: CanvasText; font: 13px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; position: relative; }
+    body { margin: 0; background: color-mix(in srgb, Canvas 92%, CanvasText 8%); color: CanvasText; font: 13px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; position: relative; }
     #toolbar { position: fixed; top: 8px; left: 8px; display: flex; gap: 6px; z-index: 10; }
     #toolbar button, #toolbar select { padding: 6px 10px; border-radius: 6px; border: 1px solid color-mix(in oklab, Canvas 70%, CanvasText 30%); background: color-mix(in oklab, Canvas 92%, CanvasText 8%); color: inherit; font: inherit; cursor: pointer; }
     #toolbar button:hover, #toolbar select:hover { background: color-mix(in oklab, Canvas 88%, CanvasText 12%); }
     #toolbar button:disabled, #toolbar select:disabled { opacity: 0.6; cursor: not-allowed; }
-    #root { padding: 56px 8px 8px 8px; display: grid; place-items: start center; }
+    #root { padding: 64px 16px 16px 16px; display: grid; place-items: start center; box-sizing: border-box; }
+    #diagram-frame { max-width: min(1100px, 100%); width: 100%; background: #ffffff; border-radius: 12px; padding: 18px; box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08); box-sizing: border-box; }
+    #diagram-container { width: 100%; }
+    #diagram-container svg { background-color: #ffffff !important; color: #000000 !important; }
+    #diagram-container .mermaid { background-color: #ffffff !important; color: #000000 !important; }
+    #png-preview { display: none; max-width: 100%; height: auto; }
     img, svg { max-width: 100%; height: auto; }
     .err { padding: 12px 14px; border-radius: 10px; background: color-mix(in oklab, Canvas 85%, red 15%); }
   </style>
   <script type="module">
     import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-    mermaid.initialize({ startOnLoad: true });
+    mermaid.initialize({ startOnLoad: true, theme: 'default', themeVariables: { background: '#ffffff' } });
   </script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/save-svg-as-png/1.4.17/saveSvgAsPng.min.js"></script>
 </head>
@@ -709,31 +749,128 @@ static std::wstring BuildWebShellHtml(const std::wstring& body, bool preferSvg) 
     <button id="btn-copy" type="button">Copy to clipboard</button>
   </div>
   <div id="root">
-    {{BODY}}
+    <div id="diagram-frame">
+      <div id="diagram-container">
+        {{BODY}}
+      </div>
+      <img id="png-preview" alt="Mermaid PNG preview"/>
+    </div>
   </div>
   <script>
     const bodyEl = document.body;
-    const root = document.getElementById('root');
+    const diagramContainer = document.getElementById('diagram-container');
+    const pngPreview = document.getElementById('png-preview');
     const refreshButton = document.getElementById('btn-refresh');
     const saveButton = document.getElementById('btn-save');
     const copyButton = document.getElementById('btn-copy');
     const formatSelect = document.getElementById('format-select');
 
     const setFormat = (value) => {
-      if (!bodyEl) { return; }
-      bodyEl.dataset.format = value;
+      if (bodyEl && bodyEl.dataset) {
+        bodyEl.dataset.format = value;
+      }
     };
     const getFormat = () => bodyEl?.dataset?.format || 'svg';
-    const getSvgElement = () => root?.querySelector('svg');
+    const getSvgElement = () => diagramContainer?.querySelector('svg');
     const getFileBase = () => bodyEl?.dataset?.sourceName || 'mermaid-diagram';
     const buildFileName = (ext) => {
       const base = getFileBase();
       return (base || 'mermaid-diagram') + '.' + ext;
     };
 
+    const renderState = {
+      svgText: '',
+      pngDataUrl: '',
+    };
+    let lastSentSvg = '';
+    let lastSentPng = '';
+    let lastSentFormat = '';
+    let pngRequestId = 0;
+
+    const storageKey = 'mermaidjs-web-format';
+
+    const isConnected = () => !!(window.chrome && window.chrome.webview);
+
+    const ensureSvgAppearance = (svg) => {
+      if (!svg) { return; }
+      svg.style.backgroundColor = '#ffffff';
+      svg.style.color = '#000000';
+    };
+
+    const encodeBase64 = (text) => {
+      try {
+        if (typeof TextEncoder !== 'undefined') {
+          const bytes = new TextEncoder().encode(text);
+          let binary = '';
+          bytes.forEach((b) => { binary += String.fromCharCode(b); });
+          return window.btoa(binary);
+        }
+        return window.btoa(unescape(encodeURIComponent(text)));
+      } catch (err) {
+        console.warn('Unable to encode payload as base64', err);
+        return '';
+      }
+    };
+
+    const extractBase64FromDataUrl = (dataUrl) => {
+      if (!dataUrl) { return ''; }
+      const comma = dataUrl.indexOf(',');
+      return comma >= 0 ? dataUrl.slice(comma + 1) : '';
+    };
+
+    const notifyHost = () => {
+      if (!isConnected()) { return; }
+      const format = getFormat();
+      const svgBase64 = renderState.svgText ? encodeBase64(renderState.svgText) : '';
+      const pngBase64 = renderState.pngDataUrl ? extractBase64FromDataUrl(renderState.pngDataUrl) : '';
+      if (svgBase64 === lastSentSvg && pngBase64 === lastSentPng && format === lastSentFormat) {
+        return;
+      }
+      lastSentSvg = svgBase64;
+      lastSentPng = pngBase64;
+      lastSentFormat = format;
+      try {
+        window.chrome.webview.postMessage({
+          type: 'rendered',
+          format,
+          svgBase64,
+          pngBase64,
+        });
+      } catch (err) {
+        console.warn('Failed to notify host about rendered diagram', err);
+      }
+    };
+
+    const hasRenderable = () => {
+      const format = getFormat();
+      if (format === 'png') {
+        return !!renderState.pngDataUrl;
+      }
+      return !!renderState.svgText;
+    };
+
+    const applyFormatDisplay = () => {
+      const svg = getSvgElement();
+      if (!svg || !pngPreview) { return; }
+      const format = getFormat();
+      if (format === 'png' && renderState.pngDataUrl) {
+        pngPreview.src = renderState.pngDataUrl;
+        pngPreview.style.display = 'block';
+        svg.style.visibility = 'hidden';
+        svg.style.position = 'absolute';
+        svg.style.pointerEvents = 'none';
+      } else {
+        pngPreview.style.display = 'none';
+        pngPreview.removeAttribute('src');
+        svg.style.removeProperty('visibility');
+        svg.style.removeProperty('position');
+        svg.style.removeProperty('pointer-events');
+      }
+    };
+
     const updateRefreshState = () => {
       if (!refreshButton) { return; }
-      const connected = !!(window.chrome && window.chrome.webview);
+      const connected = isConnected();
       refreshButton.disabled = !connected;
       if (!connected) {
         refreshButton.title = 'Available inside Total Commander';
@@ -745,7 +882,7 @@ static std::wstring BuildWebShellHtml(const std::wstring& body, bool preferSvg) 
 
     const updateSaveState = () => {
       if (!saveButton) { return; }
-      if (getSvgElement()) {
+      if (hasRenderable()) {
         saveButton.disabled = false;
         saveButton.removeAttribute('title');
       } else {
@@ -756,75 +893,78 @@ static std::wstring BuildWebShellHtml(const std::wstring& body, bool preferSvg) 
 
     const updateCopyState = () => {
       if (!copyButton) { return; }
-      const svg = getSvgElement();
-      if (!svg) {
+      if (!hasRenderable()) {
         copyButton.disabled = true;
         copyButton.title = 'Diagram not rendered yet';
+        return;
+      }
+      if (isConnected()) {
+        copyButton.disabled = false;
+        copyButton.removeAttribute('title');
         return;
       }
       if (!navigator.clipboard) {
         copyButton.disabled = true;
         copyButton.title = 'Clipboard access is unavailable';
+        window.setTimeout(updateCopyState, 1000);
         return;
       }
       if (getFormat() === 'png' && typeof window.ClipboardItem === 'undefined') {
-)HTML";
-    static const wchar_t kHtmlPart2[] = LR"HTML(        copyButton.disabled = true;
+        copyButton.disabled = true;
         copyButton.title = 'Clipboard image support is unavailable';
+        window.setTimeout(updateCopyState, 1000);
         return;
       }
       copyButton.disabled = false;
-      copyButton.removeAttribute('title');
+      copyButton.title = 'Host unavailable – using browser clipboard';
+      window.setTimeout(updateCopyState, 1000);
     };
 
-    const storageKey = 'mermaidjs-web-format';
-    const defaultFormat = getFormat();
-    let initialFormat = defaultFormat;
-    try {
-      const stored = window.localStorage?.getItem(storageKey);
-      if (stored === 'svg' || stored === 'png') {
-        initialFormat = stored;
-      }
-    } catch (err) {
-      initialFormat = defaultFormat;
-    }
-    if (formatSelect) {
-      formatSelect.value = initialFormat;
-      setFormat(formatSelect.value);
-      formatSelect.addEventListener('change', () => {
-        const value = formatSelect.value;
-        setFormat(value);
-        try {
-          window.localStorage?.setItem(storageKey, value);
-        } catch (err) {}
-        updateCopyState();
-      });
-    } else {
-      setFormat(initialFormat);
-    }
-
-    if (refreshButton) {
-      updateRefreshState();
-      refreshButton.addEventListener('click', () => {
-        if (window.chrome && window.chrome.webview) {
-          window.chrome.webview.postMessage({ type: 'refresh' });
-        } else {
-          window.location.reload();
-        }
-      });
-    }
-
-    function saveDiagram() {
+    const updateRenderOutputs = () => {
       const svgElement = getSvgElement();
       if (!svgElement) {
+        renderState.svgText = '';
+        renderState.pngDataUrl = '';
+        applyFormatDisplay();
+        updateSaveState();
+        updateCopyState();
+        notifyHost();
+        return;
+      }
+      ensureSvgAppearance(svgElement);
+      const svgCode = new XMLSerializer().serializeToString(svgElement);
+      renderState.svgText = svgCode;
+      renderState.pngDataUrl = '';
+      applyFormatDisplay();
+      updateSaveState();
+      updateCopyState();
+      notifyHost();
+      if (window.saveSvgAsPng && saveSvgAsPng.svgAsPngUri) {
+        const requestId = ++pngRequestId;
+        saveSvgAsPng.svgAsPngUri(svgElement, { backgroundColor: '#ffffff' }, (uri) => {
+          if (requestId !== pngRequestId) { return; }
+          renderState.pngDataUrl = uri || '';
+          applyFormatDisplay();
+          updateSaveState();
+          updateCopyState();
+          notifyHost();
+        });
+      }
+    };
+
+    const saveDiagram = () => {
+      if (!hasRenderable()) {
         alert('Diagram not rendered yet.');
         return;
       }
       const format = getFormat();
       const fileName = buildFileName(format === 'svg' ? 'svg' : 'png');
+      if (isConnected()) {
+        window.chrome.webview.postMessage({ type: 'saveAs' });
+        return;
+      }
       if (format === 'svg') {
-        const svgCode = new XMLSerializer().serializeToString(svgElement);
-        const blob = new Blob([svgCode], { type: 'image/svg+xml' });
+        const blob = new Blob([renderState.svgText], { type: 'image/svg+xml' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
@@ -834,49 +974,40 @@ static std::wstring BuildWebShellHtml(const std::wstring& body, bool preferSvg) 
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
       } else {
-        if (!window.saveSvgAsPng || !saveSvgAsPng.svgAsPngUri) {
-          alert('PNG export is unavailable.');
-          return;
-        }
-        saveSvgAsPng.svgAsPngUri(svgElement, null, (uri) => {
-          const link = document.createElement('a');
-          link.href = uri;
-          link.download = fileName;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-        });
+        const link = document.createElement('a');
+        link.href = renderState.pngDataUrl;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
       }
-    }
+    };
 
-    async function copyDiagram() {
-      const svgElement = getSvgElement();
-      if (!svgElement) {
+    const copyDiagram = async () => {
+      if (!hasRenderable()) {
         alert('Diagram not rendered yet.');
+        return;
+      }
+      const format = getFormat();
+      if (isConnected()) {
+        window.chrome.webview.postMessage({ type: 'copy' });
         return;
       }
       if (!navigator.clipboard) {
         alert('Clipboard access is unavailable.');
         return;
       }
-      const format = getFormat();
       try {
         if (format === 'svg') {
-          const svgCode = new XMLSerializer().serializeToString(svgElement);
-          await navigator.clipboard.writeText(svgCode);
+          await navigator.clipboard.writeText(renderState.svgText);
           alert('SVG code copied to clipboard!');
         } else {
-          if (!window.saveSvgAsPng || !saveSvgAsPng.svgAsPngUri) {
-            alert('PNG export is unavailable.');
-            return;
-          }
-          const dataUrl = await new Promise(resolve => saveSvgAsPng.svgAsPngUri(svgElement, null, resolve));
-          const response = await fetch(dataUrl);
-          const blob = await response.blob();
           if (typeof window.ClipboardItem === 'undefined') {
             alert('Clipboard image support is unavailable.');
             return;
           }
+          const response = await fetch(renderState.pngDataUrl);
+          const blob = await response.blob();
           await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
           alert('PNG image copied to clipboard!');
         }
@@ -884,14 +1015,53 @@ static std::wstring BuildWebShellHtml(const std::wstring& body, bool preferSvg) 
         console.error('Failed to copy image to clipboard: ', err);
         alert('Failed to copy. Please check the browser console for more details.');
       }
+    };
+
+    try {
+      const stored = window.localStorage?.getItem(storageKey);
+      if (stored === 'svg' || stored === 'png') {
+        setFormat(stored);
+        if (formatSelect) {
+          formatSelect.value = stored;
+        }
+      }
+    } catch (err) {}
+
+    if (formatSelect) {
+      formatSelect.value = getFormat();
+    }
+
+    if (formatSelect) {
+      formatSelect.addEventListener('change', () => {
+        const value = formatSelect.value;
+        setFormat(value);
+        try {
+          window.localStorage?.setItem(storageKey, value);
+        } catch (err) {}
+        applyFormatDisplay();
+        updateSaveState();
+        updateCopyState();
+        notifyHost();
+      });
+    }
+
+    if (refreshButton) {
+      updateRefreshState();
+      refreshButton.addEventListener('click', () => {
+        if (isConnected()) {
+          window.chrome.webview.postMessage({ type: 'refresh' });
+        } else {
+          window.location.reload();
+        }
+      });
     }
 
     if (saveButton) {
       saveButton.addEventListener('click', saveDiagram);
     }
+
     if (copyButton) {
-)HTML";
-    static const wchar_t kHtmlPart3[] = LR"HTML(      copyButton.addEventListener('click', copyDiagram);
+      copyButton.addEventListener('click', copyDiagram);
     }
 
     document.addEventListener('keydown', (ev) => {
@@ -902,17 +1072,19 @@ static std::wstring BuildWebShellHtml(const std::wstring& body, bool preferSvg) 
     });
 
     const observer = new MutationObserver(() => {
-      updateSaveState();
-      updateCopyState();
+      updateRenderOutputs();
     });
-    if (root) {
-      observer.observe(root, { childList: true, subtree: true });
+    if (diagramContainer) {
+      observer.observe(diagramContainer, { childList: true, subtree: true });
     }
-    updateSaveState();
-    updateCopyState();
+
+    updateRenderOutputs();
   </script>
 </body>
 </html>)HTML";
+
+    static const wchar_t kHtmlPart2[] = LR"HTML()HTML";
+    static const wchar_t kHtmlPart3[] = LR"HTML()HTML";
     std::wstring html;
     html.reserve(8509);
     html.append(kHtmlPart1);
@@ -1399,6 +1571,13 @@ static void HostHandleRefresh(Host* host) {
 static void HostHandleFormatChange(Host* host, bool preferSvg) {
     if (!host) return;
 
+#if MERMAIDJS_WEB_BUILD
+    {
+        std::lock_guard<std::mutex> lock(host->stateMutex);
+        host->lastPreferSvg = preferSvg;
+    }
+    AppendLog(L"HostHandleFormatChange: updated preferred format to " + std::wstring(preferSvg ? L"SVG" : L"PNG"));
+#else
     const std::wstring formatLabel = preferSvg ? L"svg" : L"png";
     const std::wstring logContext = std::wstring(L"HostHandleFormatChange(") + formatLabel + L")";
     const std::wstring errorMessage = preferSvg
@@ -1410,6 +1589,52 @@ static void HostHandleFormatChange(Host* host, bool preferSvg) {
                         logContext,
                         errorMessage,
                         true);
+#endif
+}
+
+static void HostHandleRenderUpdate(Host* host,
+                                   const std::wstring& format,
+                                   const std::wstring& svgBase64,
+                                   const std::wstring& pngBase64) {
+#if !MERMAIDJS_WEB_BUILD
+    (void)host;
+    (void)format;
+    (void)svgBase64;
+    (void)pngBase64;
+#else
+    if (!host) {
+        return;
+    }
+
+    const std::wstring loweredFormat = ToLowerTrim(format);
+    const bool preferSvg = loweredFormat.empty() ? true : (loweredFormat != L"png");
+
+    std::vector<unsigned char> svgBytes = Base64Decode(svgBase64);
+    std::wstring svgText;
+    if (!svgBytes.empty()) {
+        std::string utf8(svgBytes.begin(), svgBytes.end());
+        svgText = FromUtf8(utf8);
+    }
+    std::vector<unsigned char> pngBytes = Base64Decode(pngBase64);
+
+    const size_t svgByteCount = svgBytes.size();
+    const size_t pngByteCount = pngBytes.size();
+
+    {
+        std::lock_guard<std::mutex> lock(host->stateMutex);
+        host->lastSvg = std::move(svgText);
+        host->lastPng = std::move(pngBytes);
+        host->lastPreferSvg = preferSvg;
+        host->hasRender = preferSvg ? !host->lastSvg.empty() : !host->lastPng.empty();
+    }
+
+    std::wstringstream log;
+    log << L"HostHandleRenderUpdate: received render payload (svgBytes="
+        << static_cast<unsigned long long>(svgByteCount)
+        << L", pngBytes=" << static_cast<unsigned long long>(pngByteCount)
+        << L", preferSvg=" << (preferSvg ? L"true" : L"false") << L")";
+    AppendLog(log.str());
+#endif
 }
 
 static void HostHandleCopy(Host* host) {
@@ -1655,6 +1880,13 @@ static void InitWebView(struct Host* host){
                                     HostHandleFormatChange(host, preferSvg);
                                 } else if (type == L"copy") {
                                     HostHandleCopy(host);
+                                } else if (type == L"rendered") {
+#if MERMAIDJS_WEB_BUILD
+                                    std::wstring format = ExtractJsonStringField(json, L"format");
+                                    std::wstring svgB64 = ExtractJsonStringField(json, L"svgBase64");
+                                    std::wstring pngB64 = ExtractJsonStringField(json, L"pngBase64");
+                                    HostHandleRenderUpdate(host, format, svgB64, pngB64);
+#endif
                                 }
                             } else if (rawJson) {
                                 CoTaskMemFree(rawJson);
