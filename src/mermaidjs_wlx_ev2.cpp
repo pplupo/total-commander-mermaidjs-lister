@@ -818,16 +818,78 @@ static const wchar_t kHtmlPart2a[] = LR"HTML(
       return clone;
     };
 
-    const convertSvgToPng = (svgElement) => {
-      return new Promise((resolve) => {
-        if (!svgElement) {
-          resolve('');
-          return;
+    const measureSvgDimensions = (svgElement) => {
+      let width = Number(svgElement.getAttribute('width')) || 0;
+      let height = Number(svgElement.getAttribute('height')) || 0;
+      if (!width || !height) {
+        const viewBox = svgElement.viewBox?.baseVal;
+        if (viewBox && viewBox.width && viewBox.height) {
+          width = viewBox.width;
+          height = viewBox.height;
+        } else {
+          const rect = svgElement.getBoundingClientRect();
+          width = rect.width;
+          height = rect.height;
         }
+      }
+      width = Math.max(1, Math.round(width));
+      height = Math.max(1, Math.round(height));
+      return { width, height };
+    };
+
+    const buildExportSvg = (svgElement) => {
+      const clone = sanitizeSvgForCanvas(svgElement) || svgElement.cloneNode(true);
+      const { width, height } = measureSvgDimensions(svgElement);
+      if (!clone.getAttribute('width')) { clone.setAttribute('width', String(width)); }
+      if (!clone.getAttribute('height')) { clone.setAttribute('height', String(height)); }
+      if (!clone.getAttribute('viewBox')) {
+        clone.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      }
+      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+      return { svgNode: clone, width, height };
+    };
+
+    const convertSvgToPng = async (svgElement) => {
+      if (!svgElement) { return ''; }
+      const scale = Math.max(1, Math.round(window.devicePixelRatio || 1));
+      const toPng = window.svgAsPngUri || window.saveSvgAsPng?.svgAsPngUri;
+
+      if (typeof toPng === 'function') {
         try {
+          const { svgNode } = buildExportSvg(svgElement);
+          const wrapper = document.createElement('div');
+          wrapper.style.position = 'fixed';
+          wrapper.style.pointerEvents = 'none';
+          wrapper.style.opacity = '0';
+          wrapper.style.zIndex = '-1';
+          wrapper.style.left = '-10000px';
+          wrapper.style.top = '-10000px';
+          wrapper.appendChild(svgNode);
+          document.body.appendChild(wrapper);
+          try {
+            const uri = await toPng(svgNode, {
+              backgroundColor: '#ffffff',
+              scale,
+              canvg: window.canvg,
+              encoderType: 'image/png',
+            });
+            if (uri) {
+              return uri;
+            }
+          } finally {
+            wrapper.remove();
+          }
+        } catch (err) {
+          console.warn('save-svg-as-png failed to convert SVG', err);
+        }
+      }
+
+      return new Promise((resolve) => {
+        try {
+          const { svgNode, width, height } = buildExportSvg(svgElement);
           const serializer = new XMLSerializer();
-          const sanitizedSvg = sanitizeSvgForCanvas(svgElement);
-          const svgMarkup = sanitizedSvg ? serializer.serializeToString(sanitizedSvg) : '';
+          const svgMarkup = serializer.serializeToString(svgNode);
           const blob = new Blob([svgMarkup], { type: 'image/svg+xml' });
           const objectUrl = URL.createObjectURL(blob);
           const image = new Image();
@@ -836,25 +898,7 @@ static const wchar_t kHtmlPart2a[] = LR"HTML(
 
           image.onload = () => {
             try {
-              let width = Number(svgElement.getAttribute('width')) || 0;
-              let height = Number(svgElement.getAttribute('height')) || 0;
-              if (!width || !height) {
-                const viewBox = svgElement.viewBox?.baseVal;
-                if (viewBox && viewBox.width && viewBox.height) {
-                  width = viewBox.width;
-                  height = viewBox.height;
-                } else {
-                  const rect = svgElement.getBoundingClientRect();
-                  width = rect.width;
-                  height = rect.height;
-                }
-              }
-
-              width = Math.max(1, Math.round(width));
-              height = Math.max(1, Math.round(height));
-
               const canvas = document.createElement('canvas');
-              const scale = window.devicePixelRatio || 1;
               canvas.width = width * scale;
               canvas.height = height * scale;
               const ctx = canvas.getContext('2d');
@@ -862,7 +906,6 @@ static const wchar_t kHtmlPart2a[] = LR"HTML(
                 resolve('');
                 return;
               }
-
               if (scale !== 1) {
                 ctx.setTransform(scale, 0, 0, scale, 0, 0);
               }
