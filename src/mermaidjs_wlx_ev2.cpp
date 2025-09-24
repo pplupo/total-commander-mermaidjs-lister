@@ -788,7 +788,7 @@ static const wchar_t kHtmlPart1[] = LR"HTML(<!doctype html>
     let pngRequestId = 0;
 )HTML";
 
-static const wchar_t kHtmlPart2[] = LR"HTML(
+static const wchar_t kHtmlPart2a[] = LR"HTML(
     const storageKey = 'mermaidjs-web-format';
 
     const isConnected = () => !!(window.chrome && window.chrome.webview);
@@ -963,7 +963,9 @@ static const wchar_t kHtmlPart2[] = LR"HTML(
         saveButton.title = 'Diagram not rendered yet';
       }
     };
+)HTML";
 
+static const wchar_t kHtmlPart2b[] = LR"HTML(
     const updateCopyState = () => {
       if (!copyButton) { return; }
       if (!hasRenderable()) {
@@ -1054,6 +1056,7 @@ static const wchar_t kHtmlPart2[] = LR"HTML(
       }
     };
 )HTML";
+
 
 static const wchar_t kHtmlPart3[] = LR"HTML(
     const copyDiagram = async () => {
@@ -1158,7 +1161,8 @@ static const wchar_t kHtmlPart3[] = LR"HTML(
     std::wstring html;
     html.reserve(8509);
     html.append(kHtmlPart1);
-    html.append(kHtmlPart2);
+    html.append(kHtmlPart2a);
+    html.append(kHtmlPart2b);
     html.append(kHtmlPart3);
     ReplaceAll(html, L"{{BODY}}", body);
     ReplaceAll(html, L"{{FORMAT}}", preferSvg ? L"svg" : L"png");
