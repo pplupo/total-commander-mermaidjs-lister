@@ -788,7 +788,7 @@ static const wchar_t kHtmlPart1[] = LR"HTML(<!doctype html>
     let pngRequestId = 0;
 )HTML";
 
-static const wchar_t kHtmlPart2[] = LR"HTML(
+static const wchar_t kHtmlPart2a[] = LR"HTML(
     const storageKey = 'mermaidjs-web-format';
 
     const isConnected = () => !!(window.chrome && window.chrome.webview);
@@ -797,6 +797,77 @@ static const wchar_t kHtmlPart2[] = LR"HTML(
       if (!svg) { return; }
       svg.style.backgroundColor = '#ffffff';
       svg.style.color = '#000000';
+    };
+
+    const convertSvgToPng = (svgElement) => {
+      return new Promise((resolve) => {
+        if (!svgElement) {
+          resolve('');
+          return;
+        }
+        try {
+          const serializer = new XMLSerializer();
+          const svgMarkup = serializer.serializeToString(svgElement);
+          const blob = new Blob([svgMarkup], { type: 'image/svg+xml' });
+          const objectUrl = URL.createObjectURL(blob);
+          const image = new Image();
+          image.decoding = 'async';
+          image.crossOrigin = 'anonymous';
+
+          image.onload = () => {
+            try {
+              let width = Number(svgElement.getAttribute('width')) || 0;
+              let height = Number(svgElement.getAttribute('height')) || 0;
+              if (!width || !height) {
+                const viewBox = svgElement.viewBox?.baseVal;
+                if (viewBox && viewBox.width && viewBox.height) {
+                  width = viewBox.width;
+                  height = viewBox.height;
+                } else {
+                  const rect = svgElement.getBoundingClientRect();
+                  width = rect.width;
+                  height = rect.height;
+                }
+              }
+
+              width = Math.max(1, Math.round(width));
+              height = Math.max(1, Math.round(height));
+
+              const canvas = document.createElement('canvas');
+              const scale = window.devicePixelRatio || 1;
+              canvas.width = width * scale;
+              canvas.height = height * scale;
+              const ctx = canvas.getContext('2d');
+              if (!ctx) {
+                resolve('');
+                return;
+              }
+
+              if (scale !== 1) {
+                ctx.setTransform(scale, 0, 0, scale, 0, 0);
+              }
+              ctx.clearRect(0, 0, width, height);
+              ctx.drawImage(image, 0, 0, width, height);
+              resolve(canvas.toDataURL('image/png'));
+            } catch (err) {
+              console.warn('Failed to convert SVG to PNG', err);
+              resolve('');
+            } finally {
+              URL.revokeObjectURL(objectUrl);
+            }
+          };
+
+          image.onerror = () => {
+            URL.revokeObjectURL(objectUrl);
+            resolve('');
+          };
+
+          image.src = objectUrl;
+        } catch (err) {
+          console.warn('Failed to start SVG to PNG conversion', err);
+          resolve('');
+        }
+      });
     };
 
     const encodeBase64 = (text) => {
@@ -892,7 +963,9 @@ static const wchar_t kHtmlPart2[] = LR"HTML(
         saveButton.title = 'Diagram not rendered yet';
       }
     };
+)HTML";
 
+static const wchar_t kHtmlPart2b[] = LR"HTML(
     const updateCopyState = () => {
       if (!copyButton) { return; }
       if (!hasRenderable()) {
@@ -941,17 +1014,15 @@ static const wchar_t kHtmlPart2[] = LR"HTML(
       updateSaveState();
       updateCopyState();
       notifyHost();
-      if (window.saveSvgAsPng && saveSvgAsPng.svgAsPngUri) {
-        const requestId = ++pngRequestId;
-        saveSvgAsPng.svgAsPngUri(svgElement, { backgroundColor: '#ffffff' }, (uri) => {
-          if (requestId !== pngRequestId) { return; }
-          renderState.pngDataUrl = uri || '';
-          applyFormatDisplay();
-          updateSaveState();
-          updateCopyState();
-          notifyHost();
-        });
-      }
+      const requestId = ++pngRequestId;
+      convertSvgToPng(svgElement).then((uri) => {
+        if (requestId !== pngRequestId) { return; }
+        renderState.pngDataUrl = uri || '';
+        applyFormatDisplay();
+        updateSaveState();
+        updateCopyState();
+        notifyHost();
+      });
     };
 
     const saveDiagram = () => {
@@ -985,6 +1056,7 @@ static const wchar_t kHtmlPart2[] = LR"HTML(
       }
     };
 )HTML";
+
 
 static const wchar_t kHtmlPart3[] = LR"HTML(
     const copyDiagram = async () => {
@@ -1089,7 +1161,8 @@ static const wchar_t kHtmlPart3[] = LR"HTML(
     std::wstring html;
     html.reserve(8509);
     html.append(kHtmlPart1);
-    html.append(kHtmlPart2);
+    html.append(kHtmlPart2a);
+    html.append(kHtmlPart2b);
     html.append(kHtmlPart3);
     ReplaceAll(html, L"{{BODY}}", body);
     ReplaceAll(html, L"{{FORMAT}}", preferSvg ? L"svg" : L"png");
