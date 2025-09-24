@@ -729,8 +729,8 @@ static const wchar_t kHtmlPart1[] = LR"HTML(<!doctype html>
     #diagram-container svg { background-color: #ffffff !important; color: #000000 !important; }
     #diagram-container .mermaid { background-color: #ffffff !important; color: #000000 !important; }
     #diagram-container svg .edgeLabel rect {
-      fill: rgba(255, 255, 255, 0.92) !important;
-      stroke: rgba(0, 0, 0, 0.35) !important;
+      fill: none !important;
+      stroke: none !important;
     }
     #diagram-container svg .edgeLabel text,
     #diagram-container svg .edgeLabel tspan {
