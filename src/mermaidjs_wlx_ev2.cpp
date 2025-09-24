@@ -786,7 +786,9 @@ static const wchar_t kHtmlPart1[] = LR"HTML(<!doctype html>
     let lastSentPng = '';
     let lastSentFormat = '';
     let pngRequestId = 0;
+)HTML";
 
+static const wchar_t kHtmlPart2[] = LR"HTML(
     const storageKey = 'mermaidjs-web-format';
 
     const isConnected = () => !!(window.chrome && window.chrome.webview);
@@ -982,7 +984,9 @@ static const wchar_t kHtmlPart1[] = LR"HTML(<!doctype html>
         document.body.removeChild(link);
       }
     };
+)HTML";
 
+static const wchar_t kHtmlPart3[] = LR"HTML(
     const copyDiagram = async () => {
       if (!hasRenderable()) {
         alert('Diagram not rendered yet.');
@@ -1082,9 +1086,6 @@ static const wchar_t kHtmlPart1[] = LR"HTML(<!doctype html>
   </script>
 </body>
 </html>)HTML";
-
-    static const wchar_t kHtmlPart2[] = LR"HTML()HTML";
-    static const wchar_t kHtmlPart3[] = LR"HTML()HTML";
     std::wstring html;
     html.reserve(8509);
     html.append(kHtmlPart1);
