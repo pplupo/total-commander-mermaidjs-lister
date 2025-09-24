@@ -1,7 +1,7 @@
 # MermaidJsWebView — Total Commander Lister
 
 A tiny, modern Mermaid.js viewer for **Total Commander (64-bit)**.
-Renders diagrams **locally via the Mermaid CLI (`mmdc.bat`)**.
+Renders diagrams either **locally via the Mermaid CLI (`mmdc.bat`)** or **directly in WebView using the Mermaid CDN** depending on the build.
 Powered by **WebView2** — no Qt or zlib required.
 
 ---
@@ -20,7 +20,8 @@ Powered by **WebView2** — no Qt or zlib required.
 * **Total Commander 64-bit** (Lister/WLX plugin support).
 * **Microsoft Edge WebView2 Runtime** (evergreen).
   👉 Download from Microsoft: <https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download>
-* **Mermaid CLI** (`mmdc.bat`) – shipped with releases. The CLI requires **Node.js** and Chromium via Puppeteer.
+* **Mermaid CLI** (`mmdc.bat`) – required for the `_local` release. Shipped with the package and requires **Node.js** plus Chromium via Puppeteer.
+* The `_web` release renders using the Mermaid CDN and does **not** require the CLI (or Node.js).
 
 ---
 
@@ -34,10 +35,22 @@ That’s it. The plugin will be installed to your TC plugins folder.
 
 ---
 
+## Release variants
+
+Two ZIPs are produced for every release:
+
+* **`MermaidJsWebView_local.zip`** – matches the original behaviour. Uses the bundled Mermaid CLI for offline rendering and ships the local `third_party/mermaidjs` payload.
+* **`MermaidJsWebView_web.zip`** – a lighter package. It renders diagrams inside the WebView using the Mermaid CDN plus `save-svg-as-png` for downloads, so no CLI (or Node.js) is required. Internet access is needed for the CDN assets.
+
+Pick the variant that best suits your environment.
+
+---
+
 ## Usage
 
 * Select a Mermaid file (e.g. `.mmd`, `.mermaid`) and press **F3** (Lister).
-* The plugin renders diagrams locally via `mmdc.bat`. Configure `[mmdc]` in the INI if you need explicit paths or timeouts.
+* `_local` build: renders diagrams via the bundled `mmdc.bat`. Configure `[mmdc]` in the INI if you need explicit paths or timeouts.
+* `_web` build: renders diagrams in the embedded WebView by streaming Mermaid from the CDN. Refresh and Save remain available, and SVG/PNG downloads happen in-browser.
 * **Ctrl+C** inside the preview:
   * **SVG mode:** copies the SVG markup as text.
   * **PNG mode:** copies a PNG bitmap.
@@ -86,7 +99,8 @@ log=
 
 ## Data handling
 
-All rendering happens locally via `mmdc.bat`; the plugin does not perform any network requests beyond what the CLI needs to launch Chromium.
+* `_local` build — all rendering happens locally via `mmdc.bat`; the plugin does not perform any network requests beyond what the CLI needs to launch Chromium.
+* `_web` build — Mermaid assets are loaded from <https://cdn.jsdelivr.net> and `save-svg-as-png` from <https://cdnjs.cloudflare.com>; no CLI is invoked.
 
 ---
 
