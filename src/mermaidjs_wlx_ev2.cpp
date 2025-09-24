@@ -850,6 +850,9 @@ static const wchar_t kHtmlPart2a[] = LR"HTML(
       clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
       return { svgNode: clone, width, height };
     };
+)HTML";
+
+static const wchar_t kHtmlPart2a_continued[] = LR"HTML(
 
     const convertSvgToPng = async (svgElement) => {
       if (!svgElement) { return ''; }
@@ -1267,6 +1270,7 @@ static const wchar_t kHtmlPart3[] = LR"HTML(
     html.reserve(8509);
     html.append(kHtmlPart1);
     html.append(kHtmlPart2a);
+    html.append(kHtmlPart2a_continued);
     html.append(kHtmlPart2b);
     html.append(kHtmlPart3);
     ReplaceAll(html, L"{{BODY}}", body);
