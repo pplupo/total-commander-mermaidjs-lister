@@ -22,6 +22,10 @@
 
 #include "WebView2.h"
 
+#ifndef MERMAIDJS_WEB_BUILD
+#define MERMAIDJS_WEB_BUILD 0
+#endif
+
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "Comdlg32.lib")
 #pragma comment(lib, "windowscodecs.lib")
@@ -256,6 +260,46 @@ static void ReplaceAll(std::wstring& inout, const std::wstring& from, const std:
         inout.replace(pos, from.size(), to);
         pos += to.size();
     }
+}
+
+static std::wstring EscapeForHtmlText(const std::wstring& input) {
+    std::wstring result = input;
+    ReplaceAll(result, L"&", L"&amp;");
+    ReplaceAll(result, L"<", L"&lt;");
+    ReplaceAll(result, L">", L"&gt;");
+    return result;
+}
+
+static std::wstring EscapeForHtmlAttribute(const std::wstring& input) {
+    std::wstring result = input;
+    ReplaceAll(result, L"&", L"&amp;");
+    ReplaceAll(result, L"\"", L"&quot;");
+    ReplaceAll(result, L"'", L"&#39;");
+    ReplaceAll(result, L"<", L"&lt;");
+    ReplaceAll(result, L">", L"&gt;");
+    return result;
+}
+
+static std::wstring ExtractFileStem(const std::wstring& path) {
+    if (path.empty()) {
+        return L"diagram";
+    }
+    const wchar_t* base = PathFindFileNameW(path.c_str());
+    std::wstring stem = base ? std::wstring(base) : path;
+    size_t dot = stem.find_last_of(L'.');
+    if (dot != std::wstring::npos) {
+        stem.erase(dot);
+    }
+    if (stem.empty()) {
+        stem = L"diagram";
+    }
+    return stem;
+}
+
+static void ApplySourceNamePlaceholder(std::wstring& html, const std::wstring& path) {
+    const std::wstring stem = ExtractFileStem(path);
+    const std::wstring escaped = EscapeForHtmlAttribute(stem);
+    ReplaceAll(html, L"{{SOURCE_NAME}}", escaped);
 }
 
 static std::wstring ExtractJsonStringField(const std::wstring& json, const std::wstring& field) {
@@ -619,38 +663,283 @@ static bool RunMmdcCli(const std::wstring& umlTextW,
     return true;
 }
 
-static std::wstring BuildShellHtmlWithBody(const std::wstring& body, bool preferSvg);
+static bool BuildHtmlFromMmdcRender(const std::wstring& umlText,
+                                    const std::wstring& sourcePath,
+                                    bool preferSvg,
+                                    std::wstring& outHtml,
+                                    std::wstring* outSvg,
+                                    std::vector<unsigned char>* outPng);
+
+#if MERMAIDJS_WEB_BUILD
+
+static std::wstring BuildWebShellHtml(const std::wstring& body, bool preferSvg) {
+    std::wstring html = LR"HTML(<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>MermaidJs Viewer</title>
+  <style>
+    :root { color-scheme: light dark; }
+    html, body { height: 100%; }
+    body { margin: 0; background: canvas; color: CanvasText; font: 13px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; position: relative; }
+    #toolbar { position: fixed; top: 8px; left: 8px; display: flex; gap: 6px; z-index: 10; }
+    #toolbar button, #toolbar select { padding: 6px 10px; border-radius: 6px; border: 1px solid color-mix(in oklab, Canvas 70%, CanvasText 30%); background: color-mix(in oklab, Canvas 92%, CanvasText 8%); color: inherit; font: inherit; cursor: pointer; }
+    #toolbar button:hover, #toolbar select:hover { background: color-mix(in oklab, Canvas 88%, CanvasText 12%); }
+    #toolbar button:disabled, #toolbar select:disabled { opacity: 0.6; cursor: not-allowed; }
+    #root { padding: 56px 8px 8px 8px; display: grid; place-items: start center; }
+    img, svg { max-width: 100%; height: auto; }
+    .err { padding: 12px 14px; border-radius: 10px; background: color-mix(in oklab, Canvas 85%, red 15%); }
+  </style>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true });
+  </script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/save-svg-as-png/1.4.17/saveSvgAsPng.min.js"></script>
+</head>
+<body data-format="{{FORMAT}}" data-source-name="{{SOURCE_NAME}}">
+  <div id="toolbar">
+    <button id="btn-refresh" type="button">Refresh</button>
+    <button id="btn-save" type="button">Save as...</button>
+    <select id="format-select">
+      <option value="svg">SVG</option>
+      <option value="png">PNG</option>
+    </select>
+    <button id="btn-copy" type="button">Copy to clipboard</button>
+  </div>
+  <div id="root">
+    {{BODY}}
+  </div>
+  <script>
+    const bodyEl = document.body;
+    const root = document.getElementById('root');
+    const refreshButton = document.getElementById('btn-refresh');
+    const saveButton = document.getElementById('btn-save');
+    const copyButton = document.getElementById('btn-copy');
+    const formatSelect = document.getElementById('format-select');
+
+    const setFormat = (value) => {
+      if (!bodyEl) { return; }
+      bodyEl.dataset.format = value;
+    };
+    const getFormat = () => bodyEl?.dataset?.format || 'svg';
+    const getSvgElement = () => root?.querySelector('svg');
+    const getFileBase = () => bodyEl?.dataset?.sourceName || 'mermaid-diagram';
+    const buildFileName = (ext) => {
+      const base = getFileBase();
+      return (base || 'mermaid-diagram') + '.' + ext;
+    };
+
+    const updateRefreshState = () => {
+      if (!refreshButton) { return; }
+      const connected = !!(window.chrome && window.chrome.webview);
+      refreshButton.disabled = !connected;
+      if (!connected) {
+        refreshButton.title = 'Available inside Total Commander';
+        window.setTimeout(updateRefreshState, 1000);
+      } else {
+        refreshButton.removeAttribute('title');
+      }
+    };
+
+    const updateSaveState = () => {
+      if (!saveButton) { return; }
+      if (getSvgElement()) {
+        saveButton.disabled = false;
+        saveButton.removeAttribute('title');
+      } else {
+        saveButton.disabled = true;
+        saveButton.title = 'Diagram not rendered yet';
+      }
+    };
+
+    const updateCopyState = () => {
+      if (!copyButton) { return; }
+      const svg = getSvgElement();
+      if (!svg) {
+        copyButton.disabled = true;
+        copyButton.title = 'Diagram not rendered yet';
+        return;
+      }
+      if (!navigator.clipboard) {
+        copyButton.disabled = true;
+        copyButton.title = 'Clipboard access is unavailable';
+        return;
+      }
+      if (getFormat() === 'png' && typeof window.ClipboardItem === 'undefined') {
+        copyButton.disabled = true;
+        copyButton.title = 'Clipboard image support is unavailable';
+        return;
+      }
+      copyButton.disabled = false;
+      copyButton.removeAttribute('title');
+    };
+
+    const storageKey = 'mermaidjs-web-format';
+    const defaultFormat = getFormat();
+    let initialFormat = defaultFormat;
+    try {
+      const stored = window.localStorage?.getItem(storageKey);
+      if (stored === 'svg' || stored === 'png') {
+        initialFormat = stored;
+      }
+    } catch (err) {
+      initialFormat = defaultFormat;
+    }
+    if (formatSelect) {
+      formatSelect.value = initialFormat;
+      setFormat(formatSelect.value);
+      formatSelect.addEventListener('change', () => {
+        const value = formatSelect.value;
+        setFormat(value);
+        try {
+          window.localStorage?.setItem(storageKey, value);
+        } catch (err) {}
+        updateCopyState();
+      });
+    } else {
+      setFormat(initialFormat);
+    }
+
+    if (refreshButton) {
+      updateRefreshState();
+      refreshButton.addEventListener('click', () => {
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage({ type: 'refresh' });
+        } else {
+          window.location.reload();
+        }
+      });
+    }
+
+    function saveDiagram() {
+      const svgElement = getSvgElement();
+      if (!svgElement) {
+        alert('Diagram not rendered yet.');
+        return;
+      }
+      const format = getFormat();
+      const fileName = buildFileName(format === 'svg' ? 'svg' : 'png');
+      if (format === 'svg') {
+        const svgCode = new XMLSerializer().serializeToString(svgElement);
+        const blob = new Blob([svgCode], { type: 'image/svg+xml' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      } else {
+        if (!window.saveSvgAsPng || !saveSvgAsPng.svgAsPngUri) {
+          alert('PNG export is unavailable.');
+          return;
+        }
+        saveSvgAsPng.svgAsPngUri(svgElement, null, (uri) => {
+          const link = document.createElement('a');
+          link.href = uri;
+          link.download = fileName;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        });
+      }
+    }
+
+    async function copyDiagram() {
+      const svgElement = getSvgElement();
+      if (!svgElement) {
+        alert('Diagram not rendered yet.');
+        return;
+      }
+      if (!navigator.clipboard) {
+        alert('Clipboard access is unavailable.');
+        return;
+      }
+      const format = getFormat();
+      try {
+        if (format === 'svg') {
+          const svgCode = new XMLSerializer().serializeToString(svgElement);
+          await navigator.clipboard.writeText(svgCode);
+          alert('SVG code copied to clipboard!');
+        } else {
+          if (!window.saveSvgAsPng || !saveSvgAsPng.svgAsPngUri) {
+            alert('PNG export is unavailable.');
+            return;
+          }
+          const dataUrl = await new Promise(resolve => saveSvgAsPng.svgAsPngUri(svgElement, null, resolve));
+          const response = await fetch(dataUrl);
+          const blob = await response.blob();
+          if (typeof window.ClipboardItem === 'undefined') {
+            alert('Clipboard image support is unavailable.');
+            return;
+          }
+          await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+          alert('PNG image copied to clipboard!');
+        }
+      } catch (err) {
+        console.error('Failed to copy image to clipboard: ', err);
+        alert('Failed to copy. Please check the browser console for more details.');
+      }
+    }
+
+    if (saveButton) {
+      saveButton.addEventListener('click', saveDiagram);
+    }
+    if (copyButton) {
+      copyButton.addEventListener('click', copyDiagram);
+    }
+
+    document.addEventListener('keydown', (ev) => {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'c') {
+        ev.preventDefault();
+        copyDiagram();
+      }
+    });
+
+    const observer = new MutationObserver(() => {
+      updateSaveState();
+      updateCopyState();
+    });
+    if (root) {
+      observer.observe(root, { childList: true, subtree: true });
+    }
+    updateSaveState();
+    updateCopyState();
+  </script>
+</body>
+</html>)HTML";
+    ReplaceAll(html, L"{{BODY}}", body);
+    ReplaceAll(html, L"{{FORMAT}}", preferSvg ? L"svg" : L"png");
+    return html;
+}
 
 static bool BuildHtmlFromMmdcRender(const std::wstring& umlText,
+                                    const std::wstring& /*sourcePath*/,
                                     bool preferSvg,
                                     std::wstring& outHtml,
                                     std::wstring* outSvg,
                                     std::vector<unsigned char>* outPng) {
-    std::wstring svgOut;
-    std::vector<unsigned char> pngOut;
-    if (!RunMmdcCli(umlText, preferSvg, svgOut, pngOut)) {
-        return false;
-    }
-
-    if (preferSvg) {
-        outHtml = BuildShellHtmlWithBody(svgOut, true);
-    } else {
-        const std::string b64 = Base64(pngOut);
-        std::wstring body = L"<img alt=\"diagram\" src=\"data:image/png;base64,";
-        body += FromUtf8(b64);
-        body += L"\"/>";
-        outHtml = BuildShellHtmlWithBody(body, false);
-    }
+    std::wstring body = L"<pre class='mermaid'>" + EscapeForHtmlText(umlText) + L"</pre>";
+    outHtml = BuildWebShellHtml(body, preferSvg);
     if (outSvg) {
-        *outSvg = std::move(svgOut);
+        outSvg->clear();
     }
     if (outPng) {
-        *outPng = std::move(pngOut);
+        outPng->clear();
     }
     return true;
 }
 
-// Build minimal HTML wrapper with injected BODY (svg markup or <img src="data:...">)
+static std::wstring BuildErrorHtml(const std::wstring& message, bool preferSvg) {
+    std::wstring safe = EscapeForHtmlText(message);
+    return BuildWebShellHtml(L"<div class='err'>" + safe + L"</div>", preferSvg);
+}
+
+#else  // MERMAIDJS_WEB_BUILD
+
 static std::wstring BuildShellHtmlWithBody(const std::wstring& body, bool preferSvg) {
     std::wstring html = LR"HTML(<!doctype html>
 <html>
@@ -672,7 +961,7 @@ static std::wstring BuildShellHtmlWithBody(const std::wstring& body, bool prefer
     .err { padding: 12px 14px; border-radius: 10px; background: color-mix(in oklab, Canvas 85%, red 15%); }
   </style>
 </head>
-<body data-format="{{FORMAT}}">
+<body data-format="{{FORMAT}}" data-source-name="{{SOURCE_NAME}}">
   <div id="toolbar">
     <button id="btn-refresh" type="button">Refresh</button>
     <button id="btn-save" type="button">Save as...</button>
@@ -806,7 +1095,6 @@ static std::wstring BuildShellHtmlWithBody(const std::wstring& body, bool prefer
       updateCopyState();
       copyButton.addEventListener('click', triggerCopy);
     }
-    // Ctrl+C copies SVG or PNG
     document.addEventListener('keydown', async ev => {
       if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'c') {
         ev.preventDefault();
@@ -821,6 +1109,36 @@ static std::wstring BuildShellHtmlWithBody(const std::wstring& body, bool prefer
     return html;
 }
 
+static bool BuildHtmlFromMmdcRender(const std::wstring& umlText,
+                                    const std::wstring& /*sourcePath*/,
+                                    bool preferSvg,
+                                    std::wstring& outHtml,
+                                    std::wstring* outSvg,
+                                    std::vector<unsigned char>* outPng) {
+    std::wstring svgOut;
+    std::vector<unsigned char> pngOut;
+    if (!RunMmdcCli(umlText, preferSvg, svgOut, pngOut)) {
+        return false;
+    }
+
+    if (preferSvg) {
+        outHtml = BuildShellHtmlWithBody(svgOut, true);
+    } else {
+        const std::string b64 = Base64(pngOut);
+        std::wstring body = L"<img alt=\"diagram\" src=\"data:image/png;base64,";
+        body += FromUtf8(b64);
+        body += L"\"/>";
+        outHtml = BuildShellHtmlWithBody(body, false);
+    }
+    if (outSvg) {
+        *outSvg = std::move(svgOut);
+    }
+    if (outPng) {
+        *outPng = std::move(pngOut);
+    }
+    return true;
+}
+
 static std::wstring BuildErrorHtml(const std::wstring& message, bool preferSvg) {
     std::wstring safe = message;
     ReplaceAll(safe, L"<", L"&lt;");
@@ -828,6 +1146,7 @@ static std::wstring BuildErrorHtml(const std::wstring& message, bool preferSvg) 
     return BuildShellHtmlWithBody(L"<div class='err'>"+safe+L"</div>", preferSvg);
 }
 
+#endif  // MERMAIDJS_WEB_BUILD
 // ---------------------- WebView host ----------------------
 static const wchar_t* kWndClass = L"PumlWebViewHost";
 
@@ -920,15 +1239,23 @@ static bool HostRenderAndReload(Host* host,
     std::vector<unsigned char> png;
     std::wstring htmlToNavigate;
 
-    if (BuildHtmlFromMmdcRender(text, preferSvg, html, &svg, &png)) {
+    if (BuildHtmlFromMmdcRender(text, sourcePath, preferSvg, html, &svg, &png)) {
         AppendLog(logContext + L": render succeeded");
+        std::wstring preparedHtml = html;
+        ApplySourceNamePlaceholder(preparedHtml, sourcePath);
         {
             std::lock_guard<std::mutex> lock(host->stateMutex);
-            host->initialHtml = html;
+            host->initialHtml = std::move(preparedHtml);
+            host->lastPreferSvg = preferSvg;
+#if MERMAIDJS_WEB_BUILD
+            host->lastSvg.clear();
+            host->lastPng.clear();
+            host->hasRender = false;
+#else
             host->lastSvg = std::move(svg);
             host->lastPng = std::move(png);
-            host->lastPreferSvg = preferSvg;
             host->hasRender = true;
+#endif
             htmlToNavigate = host->initialHtml;
         }
     } else {
@@ -936,9 +1263,11 @@ static bool HostRenderAndReload(Host* host,
         const std::wstring dialogMessage = failureDialogMessage.empty()
             ? std::wstring(L"Unable to render the diagram. Check the log for details.")
             : failureDialogMessage;
+        std::wstring errorHtml = BuildErrorHtml(dialogMessage, preferSvg);
+        ApplySourceNamePlaceholder(errorHtml, sourcePath);
         {
             std::lock_guard<std::mutex> lock(host->stateMutex);
-            host->initialHtml = BuildErrorHtml(dialogMessage, preferSvg);
+            host->initialHtml = std::move(errorHtml);
             host->lastSvg.clear();
             host->lastPng.clear();
             host->lastPreferSvg = preferSvg;
@@ -1423,30 +1752,60 @@ __declspec(dllexport) HWND __stdcall ListLoadW(HWND ParentWin, wchar_t* FileToLo
     const bool preferSvg = (ToLowerTrim(g_prefer) == L"svg");
     AppendLog(L"ListLoadW: preferSvg=" + std::wstring(preferSvg ? L"true" : L"false"));
 
+    std::wstring sourcePath = FileToLoad ? std::wstring(FileToLoad) : std::wstring();
+#if MERMAIDJS_WEB_BUILD
+    AppendLog(L"ListLoadW: preparing web-based rendering");
+#else
     AppendLog(L"ListLoadW: attempting Mermaid CLI render with cli=" + (g_mmdcPath.empty() ? std::wstring(L"<auto>") : g_mmdcPath));
+#endif
     std::wstring html;
-    if (BuildHtmlFromMmdcRender(text, preferSvg, html, &host->lastSvg, &host->lastPng)) {
+    std::wstring svg;
+    std::vector<unsigned char> png;
+    if (BuildHtmlFromMmdcRender(text, sourcePath, preferSvg, html, &svg, &png)) {
+        std::wstring preparedHtml = html;
+        ApplySourceNamePlaceholder(preparedHtml, sourcePath);
         {
             std::lock_guard<std::mutex> lock(host->stateMutex);
-            host->initialHtml = html;
-            host->sourceFilePath = FileToLoad ? std::wstring(FileToLoad) : std::wstring();
+            host->initialHtml = std::move(preparedHtml);
+            host->sourceFilePath = std::move(sourcePath);
             host->lastPreferSvg = preferSvg;
+            host->hasRender = false;
+#if MERMAIDJS_WEB_BUILD
+            host->lastSvg.clear();
+            host->lastPng.clear();
+#else
+            host->lastSvg = std::move(svg);
+            host->lastPng = std::move(png);
             host->hasRender = true;
+#endif
         }
+#if MERMAIDJS_WEB_BUILD
+        AppendLog(L"ListLoadW: web render prepared");
+#else
         AppendLog(L"ListLoadW: local render succeeded" + std::wstring(preferSvg ? L" (SVG)" : L" (PNG)"));
+#endif
     } else {
+#if MERMAIDJS_WEB_BUILD
+        const std::wstring lastErr = L"Unable to prepare the diagram for web rendering.";
+#else
         const std::wstring lastErr = L"Local Mermaid CLI rendering failed. Check mmdc.bat path in the INI file.";
+#endif
         {
             std::lock_guard<std::mutex> lock(host->stateMutex);
             host->initialHtml = BuildErrorHtml(lastErr, preferSvg);
-            host->sourceFilePath = FileToLoad ? std::wstring(FileToLoad) : std::wstring();
+            ApplySourceNamePlaceholder(host->initialHtml, sourcePath);
+            host->sourceFilePath = std::move(sourcePath);
             host->lastPreferSvg = preferSvg;
             host->lastSvg.clear();
             host->lastPng.clear();
             host->hasRender = false;
         }
+#if MERMAIDJS_WEB_BUILD
+        AppendLog(L"ListLoadW: web render failed -> " + lastErr);
+#else
         AppendLog(L"ListLoadW: Mermaid CLI error message -> " + lastErr);
         AppendLog(L"ListLoadW: local render failed");
+#endif
         AppendLog(L"ListLoadW: showing error HTML");
     }
 

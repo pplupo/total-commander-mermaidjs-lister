@@ -58,33 +58,34 @@ jobs:
         with:
           arch: x64
 
-      - name: Configure (CMake)
+      - name: Configure (CMake - local)
         run: |
-          cmake -S . -B build -G Ninja `
+          cmake -S . -B build_local -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="${{ github.workspace }}\dist" `
-            -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="${{ github.workspace }}\dist"
+            -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="${{ github.workspace }}\dist_local" `
+            -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="${{ github.workspace }}\dist_local" `
+            -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY="${{ github.workspace }}\dist_local"
 
-      - name: Build
-        run: cmake --build build --config Release -v
+      - name: Build (local)
+        run: cmake --build build_local --config Release -v
 
-      - name: Verify build outputs
+      - name: Verify build outputs (local)
         run: |
           $plugin = 'MermaidJsWebView.wlx64'
-          if (!(Test-Path (Join-Path dist $plugin))) {
+          if (!(Test-Path (Join-Path dist_local $plugin))) {
             Get-ChildItem -Recurse -File . | Select-Object FullName | Out-String -Width 2000 | Write-Host
-            throw "dist\$plugin not found. Build failed or output dir differs."
+            throw "dist_local\$plugin not found. Build failed or output dir differs."
           }
 
-      - name: Stage package (flat, installable ZIP)
+      - name: Stage package (local)
         run: |
           Set-StrictMode -Version Latest
-          $stage = Join-Path -Path "package" -ChildPath "MermaidJsWebView"
+          $stage = Join-Path -Path "package" -ChildPath "MermaidJsWebView_local"
           Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $stage | Out-Null
 
           $plugin = 'MermaidJsWebView.wlx64'
-          $built = Join-Path -Path 'dist' -ChildPath $plugin
+          $built = Join-Path -Path 'dist_local' -ChildPath $plugin
           if (!(Test-Path $built)) { throw "$built not found" }
           Copy-Item -Force $built $stage\
 
@@ -123,11 +124,86 @@ jobs:
               Remove-Item -Force -ErrorAction SilentlyContinue
           }
 
-      - name: Create ZIP (no nesting)
+      - name: Create ZIP (local)
         run: |
           Set-StrictMode -Version Latest
-          $stage = Join-Path -Path "package" -ChildPath "MermaidJsWebView"
-          $out = "MermaidJsWebView.zip"
+          $stage = Join-Path -Path "package" -ChildPath "MermaidJsWebView_local"
+          $out = "MermaidJsWebView_local.zip"
+          Remove-Item -Force $out -ErrorAction SilentlyContinue
+          Compress-Archive -Path (Join-Path -Path $stage -ChildPath '*') -DestinationPath $out -Force
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead($out)
+          try {
+            $entries = $zip.Entries
+            $hasInf  = $entries | Where-Object { $_.FullName -ieq 'pluginst.inf' } | Select-Object -First 1
+            $nested  = @($entries | Where-Object { $_.FullName -match '\.zip$' } | Select-Object -ExpandProperty FullName)
+
+            if (-not $hasInf) {
+              throw "pluginst.inf is not at the root of ${out}"
+            }
+            if ($nested.Count -gt 0) {
+              $list = ($nested -join ', ')
+              throw "Nested zip(s) found in ${out}: $list"
+            }
+          }
+          finally {
+            $zip.Dispose()
+          }
+
+      - name: Configure (CMake - web)
+        run: |
+          cmake -S . -B build_web -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DMERMAIDJS_WEB_BUILD=ON `
+            -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="${{ github.workspace }}\dist_web" `
+            -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="${{ github.workspace }}\dist_web" `
+            -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY="${{ github.workspace }}\dist_web"
+
+      - name: Build (web)
+        run: cmake --build build_web --config Release -v
+
+      - name: Verify build outputs (web)
+        run: |
+          $plugin = 'MermaidJsWebView.wlx64'
+          if (!(Test-Path (Join-Path dist_web $plugin))) {
+            Get-ChildItem -Recurse -File . | Select-Object FullName | Out-String -Width 2000 | Write-Host
+            throw "dist_web\$plugin not found. Build failed or output dir differs."
+          }
+
+      - name: Stage package (web)
+        run: |
+          Set-StrictMode -Version Latest
+          $stage = Join-Path -Path "package" -ChildPath "MermaidJsWebView_web"
+          Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $stage | Out-Null
+
+          $plugin = 'MermaidJsWebView.wlx64'
+          $built = Join-Path -Path 'dist_web' -ChildPath $plugin
+          if (!(Test-Path $built)) { throw "$built not found" }
+          Copy-Item -Force $built $stage\
+
+          $inf = "resources\pluginst.inf"
+          if (!(Test-Path $inf)) { throw "$inf not found" }
+          Copy-Item -Force $inf $stage\
+
+          if (Test-Path .\mermaidjswebview.ini) {
+            Copy-Item -Force .\mermaidjswebview.ini $stage\
+          } elseif (Test-Path .\src\mermaidjswebview.ini) {
+            Copy-Item -Force .\src\mermaidjswebview.ini $stage\
+          }
+
+          if (Test-Path .\README.md) { Copy-Item -Force .\README.md $stage\ }
+
+          $wv2 = "third_party\WebView2\build\native\x64\WebView2Loader.dll"
+          if (!(Test-Path $wv2)) { throw "WebView2Loader.dll not found at $wv2" }
+          Copy-Item -Force $wv2 $stage\
+
+      - name: Create ZIP (web)
+        run: |
+          Set-StrictMode -Version Latest
+          $stage = Join-Path -Path "package" -ChildPath "MermaidJsWebView_web"
+          $out = "MermaidJsWebView_web.zip"
           Remove-Item -Force $out -ErrorAction SilentlyContinue
           Compress-Archive -Path (Join-Path -Path $stage -ChildPath '*') -DestinationPath $out -Force
 
@@ -190,5 +266,6 @@ jobs:
           name: ${{ steps.tag.outputs.tag }}
           draft: ${{ github.event.inputs.draft || 'true' }}
           files: |
-            MermaidJsWebView.zip
+            MermaidJsWebView_local.zip
+            MermaidJsWebView_web.zip
           body_path: ${{ steps.release_notes.outputs.path }}
