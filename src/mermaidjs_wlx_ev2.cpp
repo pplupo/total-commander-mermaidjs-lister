@@ -819,6 +819,38 @@ static const wchar_t kHtmlPart2a[] = LR"HTML(
       return clone;
     };
 
+    const inlineTextStyles = (sourceSvg, targetSvg) => {
+      if (!sourceSvg || !targetSvg) { return; }
+      const sourceNodes = sourceSvg.querySelectorAll('text, tspan');
+      const targetNodes = targetSvg.querySelectorAll('text, tspan');
+      if (sourceNodes.length !== targetNodes.length) { return; }
+      sourceNodes.forEach((sourceNode, index) => {
+        const targetNode = targetNodes[index];
+        if (!targetNode) { return; }
+        const computed = window.getComputedStyle(sourceNode);
+        if (!computed) { return; }
+        const setAttr = (name, value) => {
+          if (!value) { return; }
+          targetNode.setAttribute(name, value);
+        };
+        setAttr('font-family', computed.fontFamily);
+        setAttr('font-size', computed.fontSize);
+        setAttr('font-weight', computed.fontWeight);
+        setAttr('font-style', computed.fontStyle);
+        setAttr('letter-spacing', computed.letterSpacing);
+        setAttr('text-anchor', computed.textAnchor);
+        const fill = computed.fill && computed.fill !== 'none' ? computed.fill : '#000000';
+        setAttr('fill', fill);
+        if (computed.stroke && computed.stroke !== 'none') {
+          setAttr('stroke', computed.stroke);
+          setAttr('stroke-width', computed.strokeWidth);
+        } else {
+          targetNode.removeAttribute('stroke');
+          targetNode.removeAttribute('stroke-width');
+        }
+      });
+    };
+
     const measureSvgDimensions = (svgElement) => {
       let width = Number(svgElement.getAttribute('width')) || 0;
       let height = Number(svgElement.getAttribute('height')) || 0;
@@ -840,6 +872,7 @@ static const wchar_t kHtmlPart2a[] = LR"HTML(
 
     const buildExportSvg = (svgElement) => {
       const clone = sanitizeSvgForCanvas(svgElement) || svgElement.cloneNode(true);
+      inlineTextStyles(svgElement, clone);
       const { width, height } = measureSvgDimensions(svgElement);
       if (!clone.getAttribute('width')) { clone.setAttribute('width', String(width)); }
       if (!clone.getAttribute('height')) { clone.setAttribute('height', String(height)); }
