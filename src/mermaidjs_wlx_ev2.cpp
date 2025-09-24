@@ -734,7 +734,23 @@ static const wchar_t kHtmlPart1[] = LR"HTML(<!doctype html>
   </style>
   <script type="module">
     import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-    mermaid.initialize({ startOnLoad: true, theme: 'default', themeVariables: { background: '#ffffff' } });
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'default',
+      themeVariables: { background: '#ffffff' },
+      htmlLabels: false,
+      flowchart: { htmlLabels: false },
+      class: { htmlLabels: false },
+      state: { htmlLabels: false },
+      er: { htmlLabels: false },
+      mindmap: { htmlLabels: false },
+      journey: { htmlLabels: false },
+      gantt: { htmlLabels: false },
+      gitGraph: { htmlLabels: false },
+      pie: { htmlLabels: false },
+      requirement: { htmlLabels: false },
+      timeline: { htmlLabels: false },
+    });
   </script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/save-svg-as-png/1.4.17/saveSvgAsPng.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/canvg/3.0.10/umd.min.js"></script>
@@ -851,6 +867,75 @@ static const wchar_t kHtmlPart2a[] = LR"HTML(
       });
     };
 
+    const replaceForeignObjectText = (sourceSvg, targetSvg) => {
+      if (!sourceSvg || !targetSvg) { return; }
+      const sourceNodes = sourceSvg.querySelectorAll('foreignObject');
+      const targetNodes = targetSvg.querySelectorAll('foreignObject');
+      if (!sourceNodes.length || sourceNodes.length !== targetNodes.length) { return; }
+      sourceNodes.forEach((sourceNode, index) => {
+        const targetNode = targetNodes[index];
+        if (!targetNode) { return; }
+        let bbox = null;
+        try {
+          bbox = typeof sourceNode.getBBox === 'function' ? sourceNode.getBBox() : null;
+        } catch (err) {
+          bbox = null;
+        }
+        if (!bbox || !bbox.width || !bbox.height) { return; }
+
+        const contentEl = sourceNode.querySelector('*');
+        const textSource = contentEl || sourceNode;
+        const rawText = (textSource.textContent || '').replace(/\r\n/g, '\n');
+        const lines = rawText.split('\n').map((line) => line.trim()).filter((line) => line.length > 0);
+        if (!lines.length) { return; }
+
+        const doc = targetSvg.ownerDocument || document;
+        const textEl = doc.createElementNS('http://www.w3.org/2000/svg', 'text');
+
+        const computed = contentEl ? window.getComputedStyle(contentEl) : null;
+        const fontFamily = computed?.fontFamily || 'sans-serif';
+        const fontSize = computed?.fontSize || '14px';
+        const fontWeight = computed?.fontWeight || '';
+        const fontStyle = computed?.fontStyle || '';
+        const letterSpacing = computed?.letterSpacing || '';
+        const textTransform = computed?.textTransform || '';
+        const color = computed?.color || '#000000';
+
+        const fontSizeValue = parseFloat(fontSize) || 14;
+        const lineHeightRaw = computed?.lineHeight || '';
+        let lineHeightValue = parseFloat(lineHeightRaw);
+        if (!isFinite(lineHeightValue) || lineHeightValue <= 0) {
+          lineHeightValue = fontSizeValue * 1.2;
+        }
+
+        const centerX = bbox.x + bbox.width / 2;
+        const centerY = bbox.y + bbox.height / 2;
+        textEl.setAttribute('x', String(centerX));
+        textEl.setAttribute('y', String(centerY));
+        textEl.setAttribute('text-anchor', 'middle');
+        textEl.setAttribute('dominant-baseline', 'middle');
+        textEl.setAttribute('font-family', fontFamily);
+        textEl.setAttribute('font-size', fontSize);
+        if (fontWeight && fontWeight !== 'normal') { textEl.setAttribute('font-weight', fontWeight); }
+        if (fontStyle && fontStyle !== 'normal') { textEl.setAttribute('font-style', fontStyle); }
+        if (letterSpacing && letterSpacing !== 'normal') { textEl.setAttribute('letter-spacing', letterSpacing); }
+        if (textTransform && textTransform !== 'none') { textEl.setAttribute('text-transform', textTransform); }
+        textEl.setAttribute('fill', color || '#000000');
+
+        const baselineShift = -((lines.length - 1) / 2) * lineHeightValue;
+        lines.forEach((line, lineIndex) => {
+          const tspan = doc.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+          const dy = lineIndex === 0 ? baselineShift : lineHeightValue;
+          tspan.setAttribute('x', String(centerX));
+          tspan.setAttribute('dy', String(dy));
+          tspan.textContent = line;
+          textEl.appendChild(tspan);
+        });
+
+        targetNode.replaceWith(textEl);
+      });
+    };
+
     const measureSvgDimensions = (svgElement) => {
       let width = Number(svgElement.getAttribute('width')) || 0;
       let height = Number(svgElement.getAttribute('height')) || 0;
@@ -873,6 +958,7 @@ static const wchar_t kHtmlPart2a[] = LR"HTML(
     const buildExportSvg = (svgElement) => {
       const clone = sanitizeSvgForCanvas(svgElement) || svgElement.cloneNode(true);
       inlineTextStyles(svgElement, clone);
+      replaceForeignObjectText(svgElement, clone);
       const { width, height } = measureSvgDimensions(svgElement);
       if (!clone.getAttribute('width')) { clone.setAttribute('width', String(width)); }
       if (!clone.getAttribute('height')) { clone.setAttribute('height', String(height)); }
