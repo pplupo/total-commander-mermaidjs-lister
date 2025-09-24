@@ -34,7 +34,7 @@ using namespace Microsoft::WRL;
 
 // ---------------------- Config ----------------------
 static std::wstring g_prefer    = L"svg";           // "svg" or "png"
-static std::string  g_detectA   = R"(EXT=".MERMAID" | EXT=".MMD")";
+static std::string  g_detectA   = R"(EXT="MERMAID" | EXT="MMD")";
 
 static std::wstring g_mmdcPath;                     // If empty: auto-detect moduleDir\mmdc.(bat|cmd|exe)
 static std::wstring g_logPath;                      // If empty: moduleDir\mermaidjswebview.log
@@ -737,6 +737,7 @@ static const wchar_t kHtmlPart1[] = LR"HTML(<!doctype html>
     mermaid.initialize({ startOnLoad: true, theme: 'default', themeVariables: { background: '#ffffff' } });
   </script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/save-svg-as-png/1.4.17/saveSvgAsPng.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/canvg/3.0.10/umd.min.js"></script>
 </head>
 <body data-format="{{FORMAT}}" data-source-name="{{SOURCE_NAME}}">
   <div id="toolbar">
@@ -855,9 +856,17 @@ static const wchar_t kHtmlPart2a[] = LR"HTML(
       const scale = Math.max(1, Math.round(window.devicePixelRatio || 1));
       const toPng = window.svgAsPngUri || window.saveSvgAsPng?.svgAsPngUri;
 
-      if (typeof toPng === 'function') {
+      const buildExportPayload = () => {
+        const { svgNode, width, height } = buildExportSvg(svgElement);
+        const serializer = new XMLSerializer();
+        const svgMarkup = serializer.serializeToString(svgNode);
+        return { svgNode, svgMarkup, width, height };
+      };
+
+      const trySaveSvgAsPng = async () => {
+        if (typeof toPng !== 'function') { return ''; }
         try {
-          const { svgNode } = buildExportSvg(svgElement);
+          const { svgNode } = buildExportPayload();
           const wrapper = document.createElement('div');
           wrapper.style.position = 'fixed';
           wrapper.style.pointerEvents = 'none';
@@ -883,13 +892,38 @@ static const wchar_t kHtmlPart2a[] = LR"HTML(
         } catch (err) {
           console.warn('save-svg-as-png failed to convert SVG', err);
         }
-      }
+        return '';
+      };
 
-      return new Promise((resolve) => {
+      const tryCanvg = async () => {
+        const canvgNs = window.canvg;
+        const CanvgClass = canvgNs?.Canvg || canvgNs;
+        if (!CanvgClass?.fromString) { return ''; }
         try {
-          const { svgNode, width, height } = buildExportSvg(svgElement);
-          const serializer = new XMLSerializer();
-          const svgMarkup = serializer.serializeToString(svgNode);
+          const { svgMarkup, width, height } = buildExportPayload();
+          const canvas = document.createElement('canvas');
+          canvas.width = width * scale;
+          canvas.height = height * scale;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) { return ''; }
+          if (scale !== 1) {
+            ctx.setTransform(scale, 0, 0, scale, 0, 0);
+          }
+          const instance = await CanvgClass.fromString(ctx, svgMarkup, {
+            ignoreMouse: true,
+            ignoreAnimation: true,
+          });
+          await instance.render();
+          return canvas.toDataURL('image/png');
+        } catch (err) {
+          console.warn('canvg failed to rasterize SVG', err);
+          return '';
+        }
+      };
+
+      const tryCanvasFallback = () => new Promise((resolve) => {
+        try {
+          const { svgMarkup, width, height } = buildExportPayload();
           const blob = new Blob([svgMarkup], { type: 'image/svg+xml' });
           const objectUrl = URL.createObjectURL(blob);
           const image = new Image();
@@ -931,6 +965,14 @@ static const wchar_t kHtmlPart2a[] = LR"HTML(
           resolve('');
         }
       });
+
+      const directResult = await trySaveSvgAsPng();
+      if (directResult) { return directResult; }
+
+      const canvgResult = await tryCanvg();
+      if (canvgResult) { return canvgResult; }
+
+      return tryCanvasFallback();
     };
 
     const encodeBase64 = (text) => {
