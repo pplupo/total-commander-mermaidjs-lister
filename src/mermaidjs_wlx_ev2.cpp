@@ -799,6 +799,25 @@ static const wchar_t kHtmlPart2a[] = LR"HTML(
       svg.style.color = '#000000';
     };
 
+    const sanitizeSvgForCanvas = (svgElement) => {
+      if (!svgElement) { return null; }
+      const clone = svgElement.cloneNode(true);
+      const styleNodes = clone.querySelectorAll('style');
+      styleNodes.forEach((styleEl) => {
+        const text = styleEl.textContent || '';
+        let sanitized = text.replace(/@import[^;]+;/gi, '');
+        sanitized = sanitized.replace(/@font-face\s*\{[^}]*\}/gi, (block) => {
+          return /url\((['"])?.*https?:/i.test(block) ? '' : block;
+        });
+        if (sanitized.trim()) {
+          styleEl.textContent = sanitized;
+        } else {
+          styleEl.remove();
+        }
+      });
+      return clone;
+    };
+
     const convertSvgToPng = (svgElement) => {
       return new Promise((resolve) => {
         if (!svgElement) {
@@ -807,7 +826,8 @@ static const wchar_t kHtmlPart2a[] = LR"HTML(
         }
         try {
           const serializer = new XMLSerializer();
-          const svgMarkup = serializer.serializeToString(svgElement);
+          const sanitizedSvg = sanitizeSvgForCanvas(svgElement);
+          const svgMarkup = sanitizedSvg ? serializer.serializeToString(sanitizedSvg) : '';
           const blob = new Blob([svgMarkup], { type: 'image/svg+xml' });
           const objectUrl = URL.createObjectURL(blob);
           const image = new Image();
