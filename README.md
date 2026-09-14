@@ -132,6 +132,13 @@ log=
 
   * Headers: `WebView2.h` from the WebView2 SDK.
   * Runtime: `WebView2Loader.dll` is **loaded dynamically** (no import library needed).
+  * Mermaid payload: `third_party/mermaidjs/mermaid-portable-dist.tar` is **not tracked in git**. Fetch it from the `v2.0` release before building the `_local` package:
+
+    ```sh
+    gh release download v2.0 --repo pplupo/total-commander-mermaidjs-lister \
+      --pattern 'mermaid-portable-dist.tar' --dir third_party/mermaidjs
+    (cd third_party/mermaidjs && sha256sum -c mermaid-portable-dist.tar.sha256)
+    ```
 
 Minimal CMake outline:
 

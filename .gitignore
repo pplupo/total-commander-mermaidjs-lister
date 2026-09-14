@@ -1,3 +1,7 @@
+# Mermaid portable dist — fetched from the v2.0 release asset at build time,
+# never committed (see third_party/mermaidjs/mermaid-portable-dist.tar.sha256)
+third_party/mermaidjs/mermaid-portable-dist.tar
+
 # Prerequisites
 *.d
 
